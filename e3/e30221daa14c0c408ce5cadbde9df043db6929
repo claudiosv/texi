@@ -1,0 +1,16 @@
+.gitignore
+  h_aceaeb4e74d6dc 11
+src/texi/cli.py
+  h_aceaeb4e74d6dc 3,6,8,13-14,19-20,24,137-138,140,142,144,147-152,156-161,164-167,170-182,184-185,188-198,210-211,216-217,220,222,224-239,241,243-246,248,253-267,269,271-274,276,279-280,283,304,340,397,431,438,440,442,515,614-671
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "e3e30221daa14c0c408ce5cadbde9df043db6929",
+  "prompts": {},
+  "humans": {
+    "h_aceaeb4e74d6dc": {
+      "author": "Claudio Spiess <claudiosv@users.noreply.github.com>"
+    }
+  }
+}
