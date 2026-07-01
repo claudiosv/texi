@@ -1,0 +1,30 @@
+.gitignore
+  h_aceaeb4e74d6dc 12
+src/texi/cli.py
+  h_aceaeb4e74d6dc 10,30,395,397,401,411,414,418,486,488,493,520,523,531,535-536,542-543,556,558
+pyproject.toml
+  s_9cc2c7091b976b::t_34abf7459dd1cb 11
+uv.lock
+  s_9cc2c7091b976b::t_209d95e0f3edde 103-115,137-145,326,341,378-389
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "c015af94f9f0c4e139c9d584f9216ee01c8e1914",
+  "prompts": {},
+  "humans": {
+    "h_aceaeb4e74d6dc": {
+      "author": "Claudio Spiess <claudiosv@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_9cc2c7091b976b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f4c628ba-39f0-4eb2-ad71-ad7a132b63ca",
+        "model": "unknown"
+      },
+      "human_author": "Claudio Spiess <claudiosv@users.noreply.github.com>"
+    }
+  }
+}
