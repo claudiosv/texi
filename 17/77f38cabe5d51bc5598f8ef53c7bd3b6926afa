@@ -1,0 +1,19 @@
+README.md
+  s_9cc2c7091b976b::t_df97b4fa43a885 1-66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "1777f38cabe5d51bc5598f8ef53c7bd3b6926afa",
+  "prompts": {},
+  "sessions": {
+    "s_9cc2c7091b976b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f4c628ba-39f0-4eb2-ad71-ad7a132b63ca",
+        "model": "unknown"
+      },
+      "human_author": "Claudio Spiess <claudiosv@users.noreply.github.com>"
+    }
+  }
+}
