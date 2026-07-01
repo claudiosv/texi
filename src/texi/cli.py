@@ -7,6 +7,7 @@ from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
+import inflect
 import typer
 from pydantic import ValidationError
 from rich.console import Console
@@ -26,6 +27,7 @@ console = Console()
 tlmgr_path = shutil.which("tlmgr")
 latexmk_path = shutil.which("latexmk")
 texfmt_path = shutil.which("tex-fmt")
+inflect_engine = inflect.engine()
 
 # --- Core Logic ---
 
@@ -390,27 +392,30 @@ def sync() -> None:
 
         # Filter out binaries like latexmk, pdftex, etc.
         # progress.console.print("Fetching package metadata...")
+
         metadata_task = progress.add_task(
-            description=f"Fetching metadata for {len(config.dependencies)} packages...",
+            description=f"Fetching metadata for {len(config.dependencies)} {inflect_engine.plural('package', len(config.dependencies))}...",
             total=None,
         )
         progress.console.print(
-            f"[blue]Fetching metadata for:[/blue]\n[dim]{', '.join(config.dependencies)}[/dim]"
+            f"[blue]Fetching metadata for {len(config.dependencies)} {inflect_engine.plural('package', len(config.dependencies))}:[/blue]\n[dim]{', '.join(config.dependencies)}[/dim]"
         )
         valid_dependencies, system_dependencies, already_installed = filter_packages(
             config.dependencies, env_dir, progress, metadata_task
         )
         progress.remove_task(metadata_task)
-        all_dependencies = set(valid_dependencies + system_dependencies + already_installed)
+        all_dependencies = set(
+            valid_dependencies + system_dependencies + already_installed
+        )
         progress.console.print(
-            f"[blue]Skipping {len(already_installed)} already installed packages:[/blue]\n[dim]{', '.join(already_installed)}[/dim]"
+            f"[green]✔ Skipping {len(already_installed)} already installed {inflect_engine.plural('package', len(already_installed))}:[/green]\n[dim]{', '.join(already_installed)}[/dim]"
         )
         install_task = progress.add_task(
-            description=f"Installing {len(valid_dependencies)} packages...",
+            description=f"Installing {len(valid_dependencies)} {inflect_engine.plural('package', len(valid_dependencies))}...",
             total=None,
         )
         progress.console.print(
-            f"[blue]Installing {len(valid_dependencies)} relocatable packages:[/blue]\n[dim]{', '.join(valid_dependencies)}[/dim]"
+            f"[blue]Installing {len(valid_dependencies)} relocatable {inflect_engine.plural('package', len(valid_dependencies))}:[/blue]\n[dim]{', '.join(valid_dependencies)}[/dim]"
         )
 
         cmd: list[str] = [
@@ -478,74 +483,79 @@ def sync() -> None:
             f"\n[dim]{', '.join(valid_dependencies)}[/dim]"
         )
 
-        install_task = progress.add_task(
-            description=f"Installing {len(system_dependencies)} system packages...",
-            total=None,
-        )
+        if system_dependencies:
+            install_task = progress.add_task(
+                description=f"Installing {len(system_dependencies)} system {inflect_engine.plural('package', len(system_dependencies))}...",
+                total=None,
+            )
 
-        progress.console.print(
-            f"[blue]Installing {len(system_dependencies)} system packages:[/blue]\n[dim]{', '.join(system_dependencies)}[/dim]"
-        )
+            progress.console.print(
+                f"[blue]Installing {len(system_dependencies)} system {inflect_engine.plural('package', len(system_dependencies))}:[/blue]\n[dim]{', '.join(system_dependencies)}[/dim]"
+            )
 
-        cmd: list[str] = [
-            tlmgr_path,
-            "install",
-            *system_dependencies,
-            "--machine-readable",
-        ]
+            cmd: list[str] = [
+                tlmgr_path,
+                "install",
+                *system_dependencies,
+                "--machine-readable",
+            ]
 
-        install_process = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-        )
+            install_process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            )
 
-        ignore_output = False
-        total = None
-        for line in install_process.stdout:
-            stripped_line = line.strip()
-            if stripped_line.startswith("total-bytes"):
-                parts = stripped_line.split("\t")
-                if len(parts) >= 2:
-                    total_bytes = parts[1]
-                    progress.console.print(
-                        f"[dim]Total bytes to download: {total_bytes}[/dim]"
-                    )
-                    total = int(total_bytes)
-                    progress.update(install_task, total=total)
-            if "is not relocatable, cannot install it in user mode!" in stripped_line:
-                parts = stripped_line.split()
-                if len(parts) >= 2:
-                    pkg_name = parts[2]
-                    progress.console.print(
-                        f"[yellow]Warning: Package '{pkg_name}' is not relocatable and cannot be installed in user mode. Skipping.[/yellow]"
-                    )
-                    # system_dependencies.append(pkg_name)
-
-            if not ignore_output:
-                progress.console.print(stripped_line)
-                if stripped_line.count("\t") == 9:
-                    # progress.console.print(stripped_line.count("\t"))
+            ignore_output = False
+            total = None
+            for line in install_process.stdout:
+                stripped_line = line.strip()
+                if stripped_line.startswith("total-bytes"):
                     parts = stripped_line.split("\t")
-                    # progress.console.print(f"[dim]Parsed parts: {parts}[/dim]")
-                    progress.advance(install_task, int(parts[4]))
-                elif stripped_line.count("\t") >= 2:
-                    progress.console.print(
-                        f"[red]Unexpected tab output: {stripped_line}[/red]"
+                    if len(parts) >= 2:
+                        total_bytes = parts[1]
+                        progress.console.print(
+                            f"[dim]Total bytes to download: {total_bytes}[/dim]"
+                        )
+                        total = int(total_bytes)
+                        progress.update(install_task, total=total)
+                if (
+                    "is not relocatable, cannot install it in user mode!"
+                    in stripped_line
+                ):
+                    parts = stripped_line.split()
+                    if len(parts) >= 2:
+                        pkg_name = parts[2]
+                        progress.console.print(
+                            f"[yellow]Warning: Package '{pkg_name}' is not relocatable and cannot be installed in user mode. Skipping.[/yellow]"
+                        )
+                        # system_dependencies.append(pkg_name)
+
+                if not ignore_output:
+                    progress.console.print(stripped_line)
+                    if stripped_line.count("\t") == 9:
+                        # progress.console.print(stripped_line.count("\t"))
+                        parts = stripped_line.split("\t")
+                        # progress.console.print(f"[dim]Parsed parts: {parts}[/dim]")
+                        progress.advance(install_task, int(parts[4]))
+                    elif stripped_line.count("\t") >= 2:
+                        progress.console.print(
+                            f"[red]Unexpected tab output: {stripped_line}[/red]"
+                        )
+
+                if stripped_line == "end-of-updates":
+                    progress.update(
+                        install_task,
+                        description="Running post-installation scripts...",
+                        total=None,
                     )
 
-            if stripped_line == "end-of-updates":
-                progress.update(
-                    install_task,
-                    description="Running post-installation scripts...",
-                    total=None,
-                )
-
-                ignore_output = True
+                    ignore_output = True
 
     progress.update(
         install_task, completed=len(all_dependencies), total=len(all_dependencies)
     )
+
     progress.console.print(
-        f"[green]✔ Successfully synced {len(all_dependencies)} dependencies into .texenv/[/green]"
+        f"[green]✔ Successfully synced {len(all_dependencies)} {inflect_engine.plural('dependency', len(all_dependencies))} into .texenv/[/green]"
         f"\n[dim]{', '.join(all_dependencies)}[/dim]"
     )
 
