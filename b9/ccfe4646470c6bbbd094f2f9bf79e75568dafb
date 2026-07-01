@@ -1,0 +1,14 @@
+src/texi/cli.py
+  h_aceaeb4e74d6dc 25-26,675-693
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "b9ccfe4646470c6bbbd094f2f9bf79e75568dafb",
+  "prompts": {},
+  "humans": {
+    "h_aceaeb4e74d6dc": {
+      "author": "Claudio Spiess <claudiosv@users.noreply.github.com>"
+    }
+  }
+}
