@@ -1,0 +1,30 @@
+src/texi/config.py
+  s_9cc2c7091b976b::t_d237e9bb282471 1-125
+src/texi/cli.py
+  s_9cc2c7091b976b::t_dc01221c406122 99
+  s_9cc2c7091b976b::t_cd60aa4dc17b1d 93-94
+  s_9cc2c7091b976b::t_1f4e78af4e8a73 11
+  h_aceaeb4e74d6dc 22,398,404,406,413,453-455,477,482,486-489,491,549,646
+  s_9cc2c7091b976b::t_c648f676d3b204 23,397,399,660,667
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "8f75270719661a2e37a3ce81bed4ae647f6738dd",
+  "prompts": {},
+  "humans": {
+    "h_aceaeb4e74d6dc": {
+      "author": "Claudio Spiess <claudiosv@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_9cc2c7091b976b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f4c628ba-39f0-4eb2-ad71-ad7a132b63ca",
+        "model": "claude-sonnet-4-6"
+      },
+      "human_author": "Claudio Spiess <claudiosv@users.noreply.github.com>"
+    }
+  }
+}
