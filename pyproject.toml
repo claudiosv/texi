@@ -4,8 +4,8 @@ version = "0.1.0"
 description = "An isolated workspace manager for LaTeX projects."
 requires-python = ">=3.11"
 dependencies = [
-    "typer>=0.28.8",
-    "rich>=15.0.0",
+    "typer>=0.26",
+    "rich>=15",
     "pydantic>=2.13.4",
     "httpx>=0.28.1,<1.0.0",
 ]
@@ -16,3 +16,9 @@ texi = "texi.cli:app"
 [build-system]
 build-backend = "uv_build"
 requires = ["uv_build>=0.11.26,<0.12"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.20",
+    "ty>=0.0.55",
+]
