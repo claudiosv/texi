@@ -22,6 +22,8 @@ from rich.tree import Tree
 app = typer.Typer(help="texi: LaTeX Project Workspace Manager")
 console = Console()
 tlmgr_path = shutil.which("tlmgr")
+latexmk_path = shutil.which("latexmk")
+texfmt_path = shutil.which("tex-fmt")
 
 # --- Pydantic Data Models ---
 
@@ -670,6 +672,25 @@ def tree(project_dir: Path | None = None, fls_filename: str = "main.fls") -> Non
     walk_directory(project_dir, tree)
     console.print(tree)
 
+@app.command()
+def info():
+    """Displays information about the current texi environment."""
+    cwd = Path.cwd()
+    env_dir = cwd / ".texenv"
+    tlpdb_path = env_dir / "tlpkg" / "texlive.tlpdb"
+
+    if not tlpdb_path.exists():
+        console.print(
+            "[yellow]Warning: .texenv not found. Run `texi sync` to initialize the environment.[/yellow]"
+        )
+        return
+
+    console.print(f"[bold blue]Current texi environment info:[/bold blue]")
+    console.print(f"Environment directory: {env_dir.resolve()}")
+    console.print(f"TLPDB path: {tlpdb_path.resolve()}")
+    console.print(f"Tlmgr path: {tlmgr_path}")
+    console.print(f"Latexmk path: {latexmk_path}")
+    console.print(f"Tex-fmt path: {texfmt_path}")
 
 if __name__ == "__main__":
     app()
