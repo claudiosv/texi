@@ -1,20 +1,27 @@
 import json
-import operator
 import os
+import shutil
 import subprocess
 import tomllib
+from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
 import typer
 from pydantic import BaseModel, Field, ValidationError
 from rich.console import Console
+from rich.filesize import decimal
+from rich.markup import escape
 from rich.progress import (
     Progress,
     TaskID,
 )
+from rich.text import Text
+from rich.tree import Tree
 
 app = typer.Typer(help="texi: LaTeX Project Workspace Manager")
 console = Console()
+tlmgr_path = shutil.which("tlmgr")
 
 # --- Pydantic Data Models ---
 
@@ -127,50 +134,68 @@ def generate_latexmkrc(config: TexProjectConfig, rc_path: Path) -> None:
     rc_path.write_text("\n".join(rc_lines), encoding="utf-8")
 
 
-# --- CLI Commands ---
+def _tlmgr_info(*cmd_input: list[str]) -> subprocess.CompletedProcess:
+    """Runs tlmgr info with the given input and returns the completed process."""
+    cmd: list[str] = [
+        tlmgr_path,
+        "info",
+        *cmd_input,
+    ]
+    return subprocess.run(cmd, capture_output=True, text=True, check=False)
 
 
-def filter_relocatable_packages(packages: list[str]) -> list[str]:
-    """Queries tlmgr to remove non-relocatable packages (like binaries) from the install list."""
-    if not packages:
-        return []
-
-    cmd: list[str] = ["tlmgr", "info", "--data", "name,relocatable", *packages]
-
-    console.print(" ".join(cmd))
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
-    except subprocess.CalledProcessError as e:
-        console.print("[red]Failed to query package metadata from tlmgr.[/red]")
-        console.print(f"[dim]{e.stderr}[/dim]")
-        raise typer.Exit(code=1)
-
-    valid_packages: list[str] = []
-    skipped_packages: list[str] = []
-
-    for line in result.stdout.strip().splitlines():
-        parts = line.split(",")
-        if len(parts) == 2:
-            pkg_name, is_relocatable = parts
-            if is_relocatable == "1":
-                valid_packages.append(pkg_name)
-            else:
-                skipped_packages.append(pkg_name)
-
-    missing_packages: list[str] = []
-    for line in result.stderr.strip().splitlines():
-        console.print(f"[dim]{line}[/dim]")
+def _parse_tlmgr_info_output(
+    result: subprocess.CompletedProcess, fields: list[str]
+) -> Generator[dict[str, Any | str] | dict[str, Any], Any, None]:
+    expected_seperators = len(fields) - 1
+    output_lines = result.stdout.splitlines() + result.stderr.splitlines()
+    for line in output_lines:
         if "not found neither locally nor remote" in line:
             parts = line.split()
             if len(parts) >= 3:
-                missing_packages.append(parts[2])
+                pkg_name = parts[2]
+                yield {
+                    "name": pkg_name,
+                    "status": "missing",
+                }
+        elif "not locally!" in line:  # tlmgr: package acmart not locally!
+            parts = line.split()
+            if len(parts) >= 3:
+                pkg_name = parts[2]
+                yield {"name": pkg_name, "status": "not_locally"}
+        elif (
+            line.count(",") == expected_seperators
+        ):  # Expecting lines like "pkgname,installed,relocatable,size"
+            parts = line.strip().split(",")
+            if len(parts) != len(fields):
+                yield {
+                    "status": "unexpected",
+                    "line": line,
+                    "error": f"Expected {len(fields)} fields but got {len(parts)}",
+                }
+                continue
+            parsed_fields = dict(zip(fields, parts, strict=True))
+            if "installed" in parsed_fields:
+                parsed_fields["installed"] = parsed_fields["installed"] == "1"
+            if "relocatable" in parsed_fields:
+                parsed_fields["relocatable"] = parsed_fields["relocatable"] == "1"
+            yield parsed_fields | {"status": "found"}
 
-    if skipped_packages:
-        console.print(
-            f"[dim]Skipping system binaries (non-relocatable): {', '.join(skipped_packages)}[/dim]"
-        )
+        else:
+            yield {"status": "unexpected", "line": line}
 
-    return valid_packages, skipped_packages
+
+def _get_tlmgr_info_output(
+    *cmd_input: list[str], data_fields: list[str], env_dir: Path
+) -> Generator[dict[str, Any | str] | dict[str, Any], Any, None]:
+    tlmgr_result = _tlmgr_info(
+        "--usertree",
+        str(env_dir),
+        "--data",
+        ",".join(data_fields),
+        *cmd_input,
+    )
+    return _parse_tlmgr_info_output(tlmgr_result, data_fields)
 
 
 def filter_packages(
@@ -182,220 +207,80 @@ def filter_packages(
     """
     if not packages:
         return [], [], []
-    console = progress.console
+
+    packages = list(set(packages))  # Deduplicate
     progress.update(
         task_id,
         total=len(packages),
     )
-    valid_packages: list[str] = []
-    system_packages: list[str] = []
+    installable_local_packages: list[str] = []
+    installable_system_packages: list[str] = []
     already_installed: list[str] = []
+    remote_packages: list[str] = []
+    missing_packages: list[str] = []
 
-    data_fields = "name,installed,relocatable"
-    data_fields.count(",")
-    cmd: list[str] = [
-        "tlmgr",
-        "info",
-        "--usertree",
-        str(env_dir),
-        # "--usermode", # omit?
-        # "--json", # --data name,relocatable
-        "--data",
-        data_fields,  # ,size
-        # name,category,localrev,remoterev,installed,size,relocatable,depends,cat-version,cat-date
-        "--only-installed",
-        *packages,
-    ]
+    data_fields = ["name", "installed", "relocatable"]
 
-    # Run without check=True to manually intercept missing package errors
-    result = subprocess.run(cmd, capture_output=True, text=True)
-
-    # console.print(f"[dim]tlmgr info output: {result.stdout}[/dim]")
-    # console.print(f"[dim]tlmgr err output: {result.stderr}[/dim]")
-    # 1. Intercept missing packages from stderr
-    missing_packages = []
-    remote_packages = []
-    output_lines = result.stdout.splitlines() + result.stderr.splitlines()
-    for line in output_lines:
-        if "not found neither locally nor remote" in line:
-            parts = line.split()
-            if len(parts) >= 3:
-                missing_packages.append(parts[2])
-                # progress.advance(task_id, 1)
-        elif "not locally!" in line:  # tlmgr: package acmart not locally!
-            parts = line.split()
-            if len(parts) >= 3:
-                remote_packages.append(parts[2])
-                # progress.advance(task_id, 1)
-
-                console.print(f"[orange] ❗ Not installed: {parts[2]}[/orange]")
-        elif (
-            line.count(",") == 2
-        ):  # Expecting lines like "pkgname,installed,relocatable,size"
-            # console.print(f"[dim]{line}[/dim]")
-            parts = line.strip().split(",")
-            pkg_name, installed, relocatable = (
-                parts[0],
-                parts[1],
-                parts[2],
-                # parts[3],
+    # TODO: should the "--usermode" flag be included?
+    installed_result = _get_tlmgr_info_output(
+        "--only-installed", *packages, data_fields=data_fields, env_dir=env_dir
+    )
+    for result in installed_result:
+        if result["status"] == "found":
+            if result["installed"]:
+                already_installed.append(result["name"])
+            elif not result["installed"] and result["relocatable"]:
+                installable_local_packages.append(result["name"])
+            elif not result["installed"] and not result["relocatable"]:
+                installable_system_packages.append(result["name"])
+            progress.advance(task_id, 1)
+        elif result["status"] == "missing":
+            console.print(
+                f"[yellow]Warning: Package '{result['name']}' is not available in the current TeX Live repository.[/yellow]"
             )
-            # size = int(size) if size.isdigit() else 0
-            size = 0
-            if installed == "1":
-                already_installed.append((pkg_name, size))
-                console.print(f"[green] ✔ Already installed: {pkg_name}[/green]")
-                progress.advance(task_id, 1)
-
-            elif installed == "0" and relocatable == "1":
-                console.print(
-                    f"[orange] ❗ Not installed but relocatable: {pkg_name}[/orange]"
-                )
-                valid_packages.append((pkg_name, size))
-            elif installed == "0" and relocatable == "0":
-                console.print(
-                    f"[red] ❗ Not installed and not relocatable: {pkg_name}[/red]"
-                )
-                system_packages.append((pkg_name, size))
-        else:
-            console.print(f"[red]Unexpected output: {line}[/red]")
+            missing_packages.append(result["name"])
+            progress.advance(task_id, 1)
+        elif result["status"] == "not_locally":
+            remote_packages.append(result["name"])
+            progress.advance(task_id, 1)
+        elif result["status"] == "unexpected":
+            console.print(
+                f"[red]Unexpected output from tlmgr info: {result.get('line', '')}[/red]"
+            )
 
     remaining_packages = list(set(missing_packages + remote_packages))
-    cmd: list[str] = [
-        "tlmgr",
-        "info",
-        "--usertree",
-        str(env_dir),
-        # "--usermode", # omit?
-        # "--json", # --data name,relocatable
-        "--data",
-        "name,installed,relocatable",  # ,size
-        # name,category,localrev,remoterev,installed,size,relocatable,depends,cat-version,cat-date
-        # "--only-installed",
-        "--only-remote",
-        *remaining_packages,
-    ]
 
-    # Run without check=True to manually intercept missing package errors
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    console.print(f"[dim]tlmgr info output: {result.stdout}[/dim]")
-    console.print(f"[dim]tlmgr err output: {result.stderr}[/dim]")
-    # 1. Intercept missing packages from stderr
-    # missing_packages = []
-    # remote_packages = []
-    output_lines = result.stdout.splitlines() + result.stderr.splitlines()
-    for line in output_lines:
-        if "not found neither locally nor remote" in line:
-            parts = line.split()
-            console.print(f"[dim]{line}[/dim]")
-            if len(parts) >= 3:
-                missing_packages.append(parts[2])
-                progress.advance(task_id, 1)
-
-                pkg_name = parts[2]
-                bundle = find_bundle_for_sty(pkg_name, console)
-                console.print(
-                    f"[yellow]Warning: Package '{pkg_name}' is not available in the current TeX Live repository. Did you mean '{"', or '".join(bundle)}'?[/yellow]"
-                )
-        elif "not locally!" in line:  # tlmgr: package acmart not locally!
-            parts = line.split()
-            if len(parts) >= 3:
-                remote_packages.append(parts[2])
-                progress.advance(task_id, 1)
-        elif line.count(",") == 2:
-            # console.print(f"[dim]{line}[/dim]")
-            parts = line.strip().split(",")
-            # console.print(f"[magenta]{parts}[/magenta]")
-
-            # pkg_name, installed, relocatable, size = (
-            #     parts[0],
-            #     parts[1],
-            #     parts[2],
-            #     parts[3],
-            # )
-            # size = int(size) if size.isdigit() else 0
-            pkg_name, installed, relocatable = (
-                parts[0],
-                parts[1],
-                parts[2],
-            )
-            size = 0
+    remote_result = _get_tlmgr_info_output(
+        "--only-remote", *remaining_packages, data_fields=data_fields, env_dir=env_dir
+    )
+    for result in remote_result:
+        if result["status"] == "found":
+            if result["installed"]:
+                already_installed.append(result["name"])
+            elif not result["installed"] and result["relocatable"]:
+                installable_local_packages.append(result["name"])
+            elif not result["installed"] and not result["relocatable"]:
+                installable_system_packages.append(result["name"])
             progress.advance(task_id, 1)
+        elif result["status"] == "missing":
+            console.print(
+                f"[yellow]Warning: Package '{result['name']}' is not available in the current TeX Live repository.[/yellow]"
+            )
+            missing_packages.append(result["name"])
+            progress.advance(task_id, 1)
+        elif result["status"] == "not_locally":
+            remote_packages.append(result["name"])
+            progress.advance(task_id, 1)
+        elif result["status"] == "unexpected":
+            console.print(
+                f"[red]Unexpected output from tlmgr info: {result.get('line', '')}[/red]"
+            )
 
-            if installed == "1":
-                already_installed.append((pkg_name, size))
-                console.print(f"[green] ✔ Already installed: {pkg_name}[/green]")
-            elif installed == "0" and relocatable == "1":
-                console.print(
-                    f"[orange] ❗ Not installed but relocatable: {pkg_name}[/orange]"
-                )
-                valid_packages.append((pkg_name, size))
-            elif installed == "0" and relocatable == "0":
-                console.print(
-                    f"[red] ❗ Not installed and not relocatable: {pkg_name}[/red]"
-                )
-                system_packages.append((pkg_name, size))
-        else:
-            console.print(f"[red]Unexpected output: {line}[/red]")
-
-    # if missing_packages:
-    #     console.print("[red]✖ Error: Some packages could not be found on CTAN.[/red]")
-    #     console.print(
-    #         "[yellow]Note: TeX Live uses package *bundle* names, which don't always match the .sty filename![/yellow]"
-    #     )
-    #     console.print(
-    #         f"\n[bold red]Please update these names in your texproject.toml:[/bold red] {', '.join(missing_packages)}"
-    #     )
-    #     raise typer.Exit(code=1)
-
-    # 2. Parse the JSON from stdout
-
-    # try:
-    #     package_data = json.loads(result.stdout)
-    #     # console.print(package_data)
-    #     for pkg in package_data:
-    #         pkg_name = pkg.get("name", "")
-    #         is_installed = pkg.get("installed", False)
-    #         # tlmgr JSON uses the key "relocated" for relocatable packages
-    #         is_relocatable = pkg.get("relocated", False)
-    #         is_available = pkg.get("available", False)
-    #         if not is_available:
-    #             bundle = find_bundle_for_sty(pkg_name, console)
-    #             console.print(
-    #                 f"[yellow]Warning: Package '{pkg_name}' is not available in the current TeX Live repository. Did you mean {"', or '".join(bundle)}?[/yellow]"
-    #             )
-
-    #             # skipped_packages.append(pkg_name)
-    #             continue
-    #         if is_installed:
-    #             already_installed.append(pkg_name)
-    #         elif is_relocatable:
-    #             valid_packages.append(pkg_name)
-    #         else:
-    #             system_packages.append(pkg_name)
-    #         # else:
-    #         # skipped_packages.append(pkg_name)
-
-    # except json.JSONDecodeError:
-    #     console.print("[red]Failed to parse JSON output from tlmgr.[/red]")
-    #     console.print(f"[dim]{result.stdout}[/dim]")
-    #     raise typer.Exit(code=1)
-
-    # if system_packages:
-    #     console.print(
-    #         f"[dim]Skipping system binaries (non-relocatable): {', '.join(system_packages)}[/dim]"
-    #     )
-
-    if already_installed:
-        console.print(
-            f"[dim]Already installed (skipping): {', '.join([pkg[0] for pkg in already_installed])}[/dim]"
-        )
-
-    valid_packages = list(set(valid_packages))
-    system_packages = list(set(system_packages))
+    installable_local_packages = list(set(installable_local_packages))
+    installable_system_packages = list(set(installable_system_packages))
     already_installed = list(set(already_installed))
 
-    return valid_packages, system_packages, already_installed
+    return installable_local_packages, installable_system_packages, already_installed
 
 
 def find_bundle_for_sty(sty_name: str, console: Console) -> list[str]:
@@ -416,7 +301,7 @@ def find_bundle_for_sty(sty_name: str, console: Console) -> list[str]:
     try:
         # We drop check=True so we can handle tlmgr's exit codes manually if needed,
         # but here we just want to suppress outright crashes.
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
         # if result.returncode != 0 and not result.stdout.strip():
         #     return []
         # console.print(f"[dim]tlmgr search output: {result.stdout}[/dim]")
@@ -450,6 +335,9 @@ def find_bundle_for_sty(sty_name: str, console: Console) -> list[str]:
                 break  # Found it in this bundle, skip remaining files in this bundle
 
     return matched_bundles
+
+
+# --- CLI Commands ---
 
 
 @app.command()
@@ -506,7 +394,7 @@ def sync() -> None:
             # Use Popen to stream stdout and stderr (merged via STDOUT) in real-time
             init_process = subprocess.Popen(
                 [
-                    "tlmgr",
+                    tlmgr_path,
                     "init-usertree",
                     "--usertree",
                     str(env_dir),
@@ -526,27 +414,6 @@ def sync() -> None:
                 progress.console.print("[red]Initialization failed![/red]")
                 raise typer.Exit(code=1)
             progress.remove_task(tree_task)
-            # try:
-            #     # Switched to capture_output so we can surface the actual error to the user
-            #     subprocess.run(
-            #         ["tlmgr", "init-usertree", "--usertree", str(env_dir)],
-            #         check=True,
-            #         capture_output=True,
-            #         text=True,
-            #     )
-            # except subprocess.CalledProcessError as e:
-            #     console.print("\n[red]✖ Failed to initialize local usertree.[/red]")
-            #     # Print exactly why it failed (e.g., missing xzdec, permission denied)
-            #     console.print(f"[dim]{e.stderr or e.stdout}[/dim]")
-            #     raise typer.Exit(code=1)
-
-        # progress.add_task(description="Initializing local usertree...", total=None)
-        # subprocess.run(
-        #     ["tlmgr", "init-usertree", "--usertree", str(env_dir), "--machine-readable"],
-        #     check=True,
-        #     stdout=subprocess.DEVNULL,
-        #     stderr=subprocess.DEVNULL,
-        # )
 
         # Filter out binaries like latexmk, pdftex, etc.
         # progress.console.print("Fetching package metadata...")
@@ -561,37 +428,18 @@ def sync() -> None:
         progress.remove_task(metadata_task)
         all_dependencies = set(valid_dependencies + system_dependencies)
         progress.console.print(
-            f"[dim]Skipping {len(already_installed)} already installed packages: {', '.join([pkg[0] for pkg in already_installed])}[/dim]"
+            f"[dim]Skipping {len(already_installed)} already installed packages: {', '.join(already_installed)}[/dim]"
         )
         install_task = progress.add_task(
             description=f"Installing {len(valid_dependencies)} packages...",
             total=None,
         )
         progress.console.print(
-            f"[dim]Installing {len(valid_dependencies)} relocatable packages: {', '.join([pkg[0] for pkg in valid_dependencies])}[/dim]"
+            f"[dim]Installing {len(valid_dependencies)} relocatable packages: {', '.join(valid_dependencies)}[/dim]"
         )
-        # cmd: list[str] = [
-        #     "tlmgr",
-        #     "install",
-        #     "--usertree",
-        #     str(env_dir),
-        #     "--usermode",
-        #     *config.dependencies,
-        #     "--machine-readable",
-        # ]
 
-        # try:
-        #     subprocess.run(cmd, check=True, capture_output=True, text=True)
-        # except subprocess.CalledProcessError as e:
-        #     console.print("[red]Package installation failed![/red]")
-        #     console.print(e.stderr)
-        #     raise typer.Exit(code=1)
-        sorted_valid_dependencies = sorted(
-            valid_dependencies, key=operator.itemgetter(0)
-        )
-        valid_dependencies = [pkg[0] for pkg in sorted_valid_dependencies]
         cmd: list[str] = [
-            "tlmgr",
+            tlmgr_path,
             "install",
             "--usertree",
             str(env_dir),
@@ -664,32 +512,10 @@ def sync() -> None:
             description=f"Installing {len(system_dependencies)} system packages...\n[dim]{', '.join(system_dependencies)}[/dim]",
             total=None,
         )
-        # cmd: list[str] = [
-        #     "tlmgr",
-        #     "install",
-        #     "--usertree",
-        #     str(env_dir),
-        #     "--usermode",
-        #     *config.dependencies,
-        #     "--machine-readable",
-        # ]
 
-        # try:
-        #     subprocess.run(cmd, check=True, capture_output=True, text=True)
-        # except subprocess.CalledProcessError as e:
-        #     console.print("[red]Package installation failed![/red]")
-        #     console.print(e.stderr)
-        #     raise typer.Exit(code=1)
-        sorted_system_dependencies = sorted(
-            system_dependencies, key=operator.itemgetter(0)
-        )
-        system_dependencies = [pkg[0] for pkg in sorted_system_dependencies]
         cmd: list[str] = [
             "tlmgr",
             "install",
-            # "--usertree",
-            # str(env_dir),
-            # "--usermode",
             *system_dependencies,
             "--machine-readable",
         ]
@@ -734,8 +560,6 @@ def sync() -> None:
                     )
 
             if stripped_line == "end-of-updates":
-                # progress.update(install_task, completed=100)
-                # progress.update(install_task, completed=total)
                 progress.update(
                     install_task,
                     description="Running post-installation scripts...",
@@ -743,15 +567,7 @@ def sync() -> None:
                 )
 
                 ignore_output = True
-        # install_process.
-        # for line in install_process.stdout:
-        #     progress.console.print(line.strip())
-        #     if line.strip() == "end-of-updates":
-        #         progress.update(install_task, completed=100)
 
-        # if install_process.wait() != 0:
-        # progress.console.print("[red]Package installation failed![/red]")
-        # raise typer.Exit(code=1)
     progress.update(
         install_task, completed=len(all_dependencies), total=len(all_dependencies)
     )
@@ -769,9 +585,7 @@ def build() -> None:
 
     output_file = cwd / "build" / "main.pdf"
     if output_file.exists():
-        console.print(
-            f"[dim]Removing existing output file: {output_file}[/dim]"
-        )
+        console.print(f"[dim]Removing existing output file: {output_file}[/dim]")
         output_file.unlink()
 
     load_project_config(cwd / "texproject.toml")
@@ -797,65 +611,65 @@ def build() -> None:
     except subprocess.CalledProcessError as e:
         console.print("\n[red]✖ Build failed. Check the logs above.[/red]")
         console.print(f"[dim]{e.stderr}[/dim]")
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from e
+
+
+@app.command()
+def tree(project_dir: Path | None = None, fls_filename: str = "main.fls") -> None:
+    if project_dir is None:
+        project_dir = Path.cwd()
+    fls_path = project_dir / "build" / "aux" / fls_filename
+    if not fls_path.exists():
+        console.print(
+            f"Error: {fls_filename} not found. Is your project built? Did you specify the correct filename (default: main.fls)?"
+        )
+        return
+
+    # Parse the .fls file for used inputs
+    used_files: set[Path] = set()
+    used_folders: set[Path] = set()
+    with fls_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("INPUT "):
+                raw_path = line.removeprefix("INPUT ").strip()
+                # Resolve creates an absolute path, normalizing relative dots
+                used_files.add(Path(raw_path).resolve())
+                used_folders.add(Path(raw_path).parent.resolve())
+
+    def walk_directory(current_dir: Path, tree: Tree) -> None:
+        # Sort dirs first then by filename
+        paths = sorted(
+            Path(current_dir).iterdir(),
+            key=lambda path: (path.is_file(), path.name.lower()),
+        )
+        for path in paths:
+            # Remove hidden files
+            if path.name.startswith("."):
+                continue
+            if path.is_dir() and path.resolve() in used_folders:
+                style = "dim" if path.name.startswith("__") else ""
+                branch = tree.add(
+                    f"[bold magenta]:open_file_folder: [link file://{path}]{escape(path.name)}",
+                    style=style,
+                    guide_style=style,
+                )
+                walk_directory(path, branch)
+            elif path.is_file() and path.resolve() in used_files:
+                text_filename = Text(path.name, "green")
+                text_filename.highlight_regex(r"\..*$", "bold red")
+                text_filename.stylize(f"link file://{path}")
+                file_size = path.stat().st_size
+                text_filename.append(f" ({decimal(file_size)})", "blue")
+                icon = "🐍 " if path.suffix == ".py" else "📄 "
+                tree.add(Text(icon) + text_filename)
+
+    tree = Tree(
+        f":open_file_folder: [link file://{project_dir.resolve()}]{project_dir}",
+        guide_style="bold bright_blue",
+    )
+    walk_directory(project_dir, tree)
+    console.print(tree)
 
 
 if __name__ == "__main__":
     app()
-
-# import subprocess
-# import threading
-# from typing import IO
-# from rich.console import Console
-
-# console = Console()
-
-# def stream_reader(pipe: IO[str], stream_name: str, color: str) -> None:
-#     """Reads lines from a subprocess pipe and prints them with a tag."""
-#     # This loop runs until the subprocess closes the pipe
-#     for line in pipe:
-#         # Strip trailing newlines so rich doesn't double-space
-#         clean_line = line.strip()
-#         if clean_line:
-#             console.print(f"[{color}][{stream_name}][/] {clean_line}")
-
-# def run_command() -> None:
-#     """Executes a command and streams stdout and stderr independently."""
-
-#     # 1. Open the process with separate pipes
-#     process = subprocess.Popen(
-#         ["tlmgr", "update", "--list"],  # Example command
-#         stdout=subprocess.PIPE,
-#         stderr=subprocess.PIPE,
-#         text=True
-#     )
-
-#     # 2. Assign a thread to watch each pipe
-#     # We must assert process.stdout and stderr are not None for strict type checking
-#     assert process.stdout is not None
-#     assert process.stderr is not None
-
-#     stdout_thread = threading.Thread(
-#         target=stream_reader,
-#         args=(process.stdout, "STDOUT", "green")
-#     )
-#     stderr_thread = threading.Thread(
-#         target=stream_reader,
-#         args=(process.stderr, "STDERR", "red")
-#     )
-
-#     # 3. Start watching
-#     stdout_thread.start()
-#     stderr_thread.start()
-
-#     # 4. Wait for the streams to finish reading, then wait for the process to exit
-#     stdout_thread.join()
-#     stderr_thread.join()
-
-#     exit_code = process.wait()
-
-#     if exit_code != 0:
-#         console.print(f"[bold red]Process failed with exit code {exit_code}[/bold red]")
-
-# if __name__ == "__main__":
-#     run_command()
