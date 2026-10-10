@@ -1,0 +1,33 @@
+src/texi/cli.py
+  s_ccd769f6f72a40::t_2d49701e53d8af 793-796,798
+  s_ccd769f6f72a40::t_60131b0cbdd37c 704-713,715-716,837
+  s_ccd769f6f72a40::t_0592ca04c1e138 840,848-856
+  s_ccd769f6f72a40::t_b6a81461ac44fa 444-445,451,462-463,466,469-480,483-488,500-501,535-536,538-549,558-561,584-585
+  s_ccd769f6f72a40::t_34319d8db21844 265-268,363
+  s_ccd769f6f72a40::t_9c997240ceb266 690
+  s_ccd769f6f72a40::t_4b2f9b86ac3fb9 696-702,717-718,752,890
+  s_ccd769f6f72a40::t_190e28dac41e3b 272-274,365-366,368,537,720,722,725-727
+  s_ccd769f6f72a40::t_f25b2a3085286d 10,17,504-508,520-522,550-557,588-589,591-598
+  s_ccd769f6f72a40::t_1f1a2f38abbdc4 367
+  s_ccd769f6f72a40::t_558b1520451db0 785,797,804,825
+  s_ccd769f6f72a40::t_47496ba30814b3 749-750
+  s_ccd769f6f72a40::t_5cd612e27029e4 681-689,691-695,714,751
+  s_ccd769f6f72a40::t_9e5838f9ddd4a8 3,660-680,703,821
+  s_ccd769f6f72a40::t_be45432a5e5adb 259-264,269-270,364,534,721,723-724,833-836,838-839,841-847,857-858
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "74fcdca646ccc746cdebb4dc33ea16437a8874af",
+  "prompts": {},
+  "sessions": {
+    "s_ccd769f6f72a40": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c60c4fe1-fecb-4ce7-84e0-98fc775a7efc",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Claudio Spiess <claudiosv@users.noreply.github.com>"
+    }
+  }
+}
