@@ -6,6 +6,7 @@ An isolated workspace manager for LaTeX projects.
 
 ## Features
 
+- **`texi init`** — creates a `texproject.toml`. If `.tex` files exist in the current directory tree, scans them for `\usepackage`/`\RequirePackage` and seeds `dependencies` with the resolved `tlmgr` package names.
 - **`texi sync`** — reads `texproject.toml`, initialises a local `tlmgr` user-tree in `.texenv/`, and installs declared dependencies into it.
 - **`texi build`** — compiles the project with `latexmk`, pointing it at the local `.texenv/` tree via `TEXMFHOME`.
 
@@ -23,7 +24,11 @@ uv add texi
 
 ## Usage
 
-1. Add a `texproject.toml` to your LaTeX project root:
+1. Add a `texproject.toml` to your LaTeX project root, either by hand or by running `texi init` (which scans any existing `.tex` files for dependencies):
+
+```bash
+texi init
+```
 
 ```toml
 [latexmk]
@@ -36,6 +41,13 @@ out_dir  = "build/"
 aux_dir  = "build/aux/"
 
 dependencies = ["acmart", "biblatex", "geometry"]
+```
+
+To shrink pdflatex's PDF output, set `optimize_pdf = true` under `[latexmk.execution]`. This injects `\pdfminorversion=5 \pdfcompresslevel=9 \pdfobjcompresslevel=3` before the document is read:
+
+```toml
+[latexmk.execution]
+optimize_pdf = true
 ```
 
 2. Install dependencies into the local tree:

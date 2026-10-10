@@ -84,6 +84,9 @@ class LatexmkExecution(BaseModel):
     # Pass -recorder to the TeX engine (produces .fls dependency file)
     recorder: bool = True
     warnings_as_errors: bool = False
+    # Inject \pdfminorversion=5 \pdfcompresslevel=9 \pdfobjcompresslevel=3
+    # before the document is read, to shrink pdflatex output
+    optimize_pdf: bool = False
 
 
 class LatexmkFiles(BaseModel):
