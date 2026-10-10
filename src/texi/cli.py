@@ -1,8 +1,10 @@
+import asyncio
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import tomllib
 from collections.abc import Generator
 from pathlib import Path
@@ -11,14 +13,14 @@ from typing import Annotated, Any
 import inflect
 import sh
 import typer
+from pyclack.core import ShimmerProgress, Spinner, is_cancel
+from pyclack.prompts import confirm, note, outro
+from pyclack.utils.console import console
+from pyclack.utils.styling import S_BAR_START, Color
 from pydantic import ValidationError
 from rich.console import Console
 from rich.filesize import decimal
 from rich.markup import escape
-from rich.progress import (
-    Progress,
-    TaskID,
-)
 from rich.text import Text
 from rich.tree import Tree
 
@@ -26,7 +28,6 @@ from texi import tools
 from texi.config import TexProjectConfig
 
 app = typer.Typer(help="texi: LaTeX Project Workspace Manager")
-console = Console()
 DEBUG = False
 
 
@@ -57,6 +58,16 @@ def _debug_cmd(cmd: list[str], out: Console | None = None) -> None:
         (out or console).print(f"[dim]$ {escape(' '.join(map(str, cmd)))}[/dim]")
 
 
+def _intro(title: str) -> None:
+    """pyclack's intro bar, minus its console.clear() (which wipes build logs)."""
+    console.print(Text.from_markup(f"{Color.gray(S_BAR_START)}  {title}"))
+
+
+def _confirm(message: str, *, default: bool = False) -> bool:
+    answer = asyncio.run(confirm(message=message, initial_value=default))
+    return not is_cancel(answer) and bool(answer)
+
+
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     """Run a command, echoing it and its stdout/stderr under --debug."""
     _debug_cmd(cmd)
@@ -67,6 +78,8 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
             f"--- stderr ---\n{escape(result.stderr)}[/dim]"
         )
     return result
+
+
 tlmgr_path = shutil.which("tlmgr")
 latexmk_path = shutil.which("latexmk")
 texfmt_path = shutil.which("tex-fmt")
@@ -133,7 +146,9 @@ def format_perl_value(key: str, value: str | int | bool | list[str]) -> str:
 
 def inject_pdf_primitives(engine_cmd: str) -> str:
     """Wraps a pdflatex command so pdfTeX primitives run before the source is read."""
-    primitives = r"\pdfminorversion=5\pdfcompresslevel=9\pdfobjcompresslevel=3\input{%S}"
+    primitives = (
+        r"\pdfminorversion=5\pdfcompresslevel=9\pdfobjcompresslevel=3\input{%S}"
+    )
     quoted = f'"{primitives}"'
     if "%S" in engine_cmd:
         return engine_cmd.replace("%S", quoted)
@@ -187,9 +202,10 @@ def _parse_tlmgr_info_output(
     output_lines = result.stdout.splitlines() + result.stderr.splitlines()
     for line in output_lines:
         # trailer tlmgr prints on stderr whenever any requested package is missing
-        if line.startswith(
-            ("tlmgr: action info returned an error", "tlmgr: An error has occurred")
-        ):
+        if line.startswith((
+            "tlmgr: action info returned an error",
+            "tlmgr: An error has occurred",
+        )):
             continue
         if "not found neither locally nor remote" in line:
             parts = line.split()
@@ -240,7 +256,7 @@ def _get_tlmgr_info_output(
 
 
 def filter_packages(
-    packages: list[str], env_dir: Path, progress: Progress, task_id: TaskID
+    packages: list[str], env_dir: Path, prog: ShimmerProgress
 ) -> tuple[list[str], list[str], list[str]]:
     """
     Queries tlmgr via JSON to categorize packages into valid (to install),
@@ -250,10 +266,14 @@ def filter_packages(
         return [], [], []
 
     packages = list(set(packages))  # Deduplicate
-    progress.update(
-        task_id,
-        total=len(packages),
-    )
+    done = 0
+
+    def advance() -> None:
+        nonlocal done
+        done += 1
+        prog.on_progress("Fetching metadata", done, len(packages))
+
+    prog.on_progress("Fetching metadata", 0, len(packages))
     installable_local_packages: list[str] = []
     installable_system_packages: list[str] = []
     already_installed: list[str] = []
@@ -274,16 +294,16 @@ def filter_packages(
                 installable_local_packages.append(result["name"])
             elif not result["installed"] and not result["relocatable"]:
                 installable_system_packages.append(result["name"])
-            progress.advance(task_id, 1)
+            advance()
         elif result["status"] == "missing":
             console.print(
                 f"[yellow]Warning: Package '{result['name']}' is not available in the current TeX Live repository.[/yellow]"
             )
             missing_packages.append(result["name"])
-            progress.advance(task_id, 1)
+            advance()
         elif result["status"] == "not_locally":
             remote_packages.append(result["name"])
-            progress.advance(task_id, 1)
+            advance()
         elif result["status"] == "unexpected":
             console.print(
                 f"[red]Unexpected output from tlmgr info: {result.get('line', '')}[/red]"
@@ -291,8 +311,16 @@ def filter_packages(
 
     remaining_packages = list(set(missing_packages + remote_packages))
 
-    remote_result = _get_tlmgr_info_output(
-        "--only-remote", *remaining_packages, data_fields=data_fields, env_dir=env_dir
+    # With no package args, `tlmgr info` lists *every* package, so never call it empty.
+    remote_result = (
+        _get_tlmgr_info_output(
+            "--only-remote",
+            *remaining_packages,
+            data_fields=data_fields,
+            env_dir=env_dir,
+        )
+        if remaining_packages
+        else iter(())
     )
     for result in remote_result:
         if result["status"] == "found":
@@ -302,16 +330,16 @@ def filter_packages(
                 installable_local_packages.append(result["name"])
             elif not result["installed"] and not result["relocatable"]:
                 installable_system_packages.append(result["name"])
-            progress.advance(task_id, 1)
+            advance()
         elif result["status"] == "missing":
             console.print(
                 f"[yellow]Warning: Package '{result['name']}' is not available in the current TeX Live repository.[/yellow]"
             )
             missing_packages.append(result["name"])
-            progress.advance(task_id, 1)
+            advance()
         elif result["status"] == "not_locally":
             remote_packages.append(result["name"])
-            progress.advance(task_id, 1)
+            advance()
         elif result["status"] == "unexpected":
             console.print(
                 f"[red]Unexpected output from tlmgr info: {result.get('line', '')}[/red]"
@@ -337,7 +365,7 @@ def load_sty_cache() -> dict[str, list[str]]:
         return {}
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except json.JSONDecodeError, OSError:
         return {}
 
 
@@ -385,7 +413,7 @@ def find_bundle_for_sty(
                 # Slice the string from the first '{' to the end
                 output = output[start_index:]
         data = json.loads(output)
-    except (subprocess.CalledProcessError, json.JSONDecodeError):
+    except subprocess.CalledProcessError, json.JSONDecodeError:
         console.print_exception()
         console.print(output)
         return []
@@ -473,14 +501,19 @@ def init(
     debug: DebugOpt = False,
 ) -> None:
     """Creates a texproject.toml, scanning any .tex files for package dependencies."""
+    _intro("texi init")
     cwd = Path.cwd()
     config_path = cwd / "texproject.toml"
 
     if config_path.exists() and not force:
-        console.print(
-            f"[red]Error:[/red] '{config_path.name}' already exists. Use --force to overwrite."
-        )
-        raise typer.Exit(code=1)
+        if not (
+            sys.stdin.isatty()
+            and _confirm(f"'{config_path.name}' already exists. Overwrite?")
+        ):
+            console.print(
+                f"[red]Error:[/red] '{config_path.name}' already exists. Use --force to overwrite."
+            )
+            raise typer.Exit(code=1)
 
     tex_files = [
         f
@@ -493,11 +526,15 @@ def init(
     packages = extract_packages_from_tex(cwd)
 
     if packages:
-        console.print(
-            f"[dim]Found {len(packages)} package(s) across {len(tex_files)} .tex file(s), "
-            "resolving to tlmgr dependencies...[/dim]"
+        spin = Spinner()
+        spin.start(
+            f"Found {len(packages)} package(s) across {len(tex_files)} .tex file(s), "
+            "resolving to tlmgr dependencies"
         )
-        dependencies = resolve_dependencies(packages, console)
+        try:
+            dependencies = resolve_dependencies(packages, console)
+        finally:
+            spin.stop(f"Resolved {len(packages)} package(s) to tlmgr dependencies")
     else:
         dependencies = []
         if tex_files:
@@ -520,9 +557,43 @@ def init(
     lines.append("")
     config_path.write_text("\n".join(lines), encoding="utf-8")
 
-    console.print(
+    outro(
         f"[green]✔ Created {config_path.name} with {len(dependencies)} dependencies.[/green]"
     )
+
+
+def _install(prog: ShimmerProgress, phase: str, cmd: list[str]) -> None:
+    """Run `tlmgr install --machine-readable`, feeding byte counts to the progress bar."""
+    _debug_cmd(cmd)
+    process = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    )
+    done = total = 0
+    post_install = False
+    prog.on_progress(phase)
+    for line in process.stdout:
+        if DEBUG:
+            console.print(f"[dim]{escape(line.rstrip())}[/dim]")
+        stripped = line.strip()
+        if stripped.startswith("total-bytes"):
+            parts = stripped.split("\t")
+            if len(parts) >= 2:
+                total = int(parts[1])
+                prog.on_progress(phase, done, total)
+        elif "is not relocatable, cannot install it in user mode!" in stripped:
+            parts = stripped.split()
+            if len(parts) >= 3:
+                console.print(
+                    f"[yellow]Warning: Package '{parts[2]}' is not relocatable and "
+                    "cannot be installed in user mode. Skipping.[/yellow]"
+                )
+        elif stripped == "end-of-updates":
+            post_install = True
+            prog.on_progress("Running post-installation scripts")
+        elif not post_install and stripped.count("\t") == 9:
+            done += int(stripped.split("\t")[4])
+            prog.on_progress(phase, done, total)
+    process.wait()
 
 
 @app.command()
@@ -543,6 +614,7 @@ def sync(debug: DebugOpt = False) -> None:
     --command-logfile file
     --package-logfile file
     """
+    _intro("texi sync")
     cwd = Path.cwd()
     config = load_project_config(cwd / "texproject.toml")
     env_dir = cwd / ".texenv"
@@ -554,223 +626,82 @@ def sync(debug: DebugOpt = False) -> None:
         return
 
     env_dir.mkdir(exist_ok=True)
-
-    # Path to the local database file that proves initialization
     tlpdb_path = env_dir / "tlpkg" / "texlive.tlpdb"
+    plural = inflect_engine.plural
 
-    with Progress(
-        # SpinnerColumn(),
-        # BarColumn(),
-        # TaskProgressColumn(),
-        # TimeRemainingColumn(),
-        *Progress.get_default_columns(),
-        # TextColumn("[progress.description]{task.description}"),
-        # transient=True,
-        console=console,
-    ) as progress:
+    with ShimmerProgress(console) as prog:
         if tlpdb_path.exists():
-            progress.console.print(
-                "[green]Local usertree already initialized. Skipping initialization...[/green]"
-            )
+            console.print("[green]Local usertree already initialized.[/green]")
         else:
-            tree_task = progress.add_task(
-                description="Initializing local usertree...", total=None
-            )
-            # Use Popen to stream stdout and stderr (merged via STDOUT) in real-time
+            prog.on_progress("Initializing local usertree")
             init_cmd = [tlmgr_path, "init-usertree", "--usertree", str(env_dir)]
-            _debug_cmd(init_cmd, progress.console)
+            _debug_cmd(init_cmd)
             init_process = subprocess.Popen(
                 init_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
             )
-
-            # Use progress.console.print so logs don't corrupt the live progress bar
             for line in init_process.stdout:
-                progress.console.print(line.strip())
-
-            if init_process.wait() == 0:
-                progress.console.print("[green]Initialization successful![/green]")
-            else:
-                progress.console.print("[red]Initialization failed![/red]")
+                console.print(escape(line.strip()))
+            if init_process.wait() != 0:
+                console.print("[red]Initialization failed![/red]")
                 raise typer.Exit(code=1)
-            progress.remove_task(tree_task)
 
-        # Filter out binaries like latexmk, pdftex, etc.
-        # progress.console.print("Fetching package metadata...")
-
-        metadata_task = progress.add_task(
-            description=f"Fetching metadata for {len(config.dependencies)} {inflect_engine.plural('package', len(config.dependencies))}...",
-            total=None,
-        )
-        progress.console.print(
-            f"[blue]Fetching metadata for {len(config.dependencies)} {inflect_engine.plural('package', len(config.dependencies))}:[/blue]\n[dim]{', '.join(config.dependencies)}[/dim]"
+        n = len(config.dependencies)
+        console.print(
+            f"[blue]Fetching metadata for {n} {plural('package', n)}:[/blue]\n"
+            f"[dim]{', '.join(config.dependencies)}[/dim]"
         )
         valid_dependencies, system_dependencies, already_installed = filter_packages(
-            config.dependencies, env_dir, progress, metadata_task
+            config.dependencies, env_dir, prog
         )
-        progress.remove_task(metadata_task)
         all_dependencies = set(
             valid_dependencies + system_dependencies + already_installed
         )
-        progress.console.print(
-            f"[green]✔ Skipping {len(already_installed)} already installed {inflect_engine.plural('package', len(already_installed))}:[/green]\n[dim]{', '.join(already_installed)}[/dim]"
-        )
-        install_task = progress.add_task(
-            description=f"Installing {len(valid_dependencies)} {inflect_engine.plural('package', len(valid_dependencies))}...",
-            total=None,
-        )
-        progress.console.print(
-            f"[blue]Installing {len(valid_dependencies)} relocatable {inflect_engine.plural('package', len(valid_dependencies))}:[/blue]\n[dim]{', '.join(valid_dependencies)}[/dim]"
+        console.print(
+            f"[green]✔ Skipping {len(already_installed)} already installed "
+            f"{plural('package', len(already_installed))}:[/green]\n"
+            f"[dim]{', '.join(already_installed)}[/dim]"
         )
 
-        cmd: list[str] = [
-            tlmgr_path,
-            "install",
-            "--usertree",
-            str(env_dir),
-            "--usermode",
-            *valid_dependencies,
-            "--machine-readable",
-        ]
-
-        _debug_cmd(cmd, progress.console)
-        install_process = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-        )
-
-        # install_process.
-        ignore_output = False
-        total = None
-        for line in install_process.stdout:
-            if DEBUG:
-                progress.console.print(f"[dim]{escape(line.rstrip())}[/dim]")
-            stripped_line = line.strip()
-            if stripped_line.startswith("total-bytes"):
-                parts = stripped_line.split("\t")
-                if len(parts) >= 2:
-                    total_bytes = parts[1]
-                    # progress.console.print(
-                    #     f"[dim]Total bytes to download: {total_bytes}[/dim]"
-                    # )
-                    total = int(total_bytes)
-                    progress.update(install_task, total=total)
-                    # progress.remove_task(install_task)
-                    # install_task = progress.add_task(
-                    #     description=f"Installing {len(valid_dependencies)} packages...\n",
-                    #     total=total,
-                    # )
-            if "is not relocatable, cannot install it in user mode!" in stripped_line:
-                parts = stripped_line.split()
-                if len(parts) >= 2:
-                    pkg_name = parts[2]
-                    # progress.console.print(
-                    #     f"[yellow]Warning: Package '{pkg_name}' is not relocatable and cannot be installed in user mode. Skipping.[/yellow]"
-                    # )
-                    # system_dependencies.append(pkg_name)
-
-            if not ignore_output:
-                # progress.console.print(stripped_line)
-                if stripped_line.count("\t") == 9:
-                    # progress.console.print(stripped_line.count("\t"))
-                    parts = stripped_line.split("\t")
-                    # progress.console.print(f"[dim]Parsed parts: {parts}[/dim]")
-                    progress.advance(install_task, int(parts[4]))
-
-            if stripped_line == "end-of-updates":
-                # progress.update(install_task, completed=100)
-                # progress.update(install_task, completed=total)
-                progress.update(
-                    install_task,
-                    description="Running post-installation scripts...",
-                    total=None,
-                )
-                ignore_output = True
-
-        progress.console.print(
-            f"[green]✔ Successfully synced {len(valid_dependencies)} local dependencies into .texenv/[/green]"
-            f"\n[dim]{', '.join(valid_dependencies)}[/dim]"
-        )
+        if valid_dependencies:
+            console.print(
+                f"[blue]Installing {len(valid_dependencies)} relocatable "
+                f"{plural('package', len(valid_dependencies))}:[/blue]\n"
+                f"[dim]{', '.join(valid_dependencies)}[/dim]"
+            )
+            _install(
+                prog,
+                "Installing local packages",
+                [
+                    tlmgr_path,
+                    "install",
+                    "--usertree",
+                    str(env_dir),
+                    "--usermode",
+                    *valid_dependencies,
+                    "--machine-readable",
+                ],
+            )
 
         if system_dependencies:
-            install_task = progress.add_task(
-                description=f"Installing {len(system_dependencies)} system {inflect_engine.plural('package', len(system_dependencies))}...",
-                total=None,
+            console.print(
+                f"[blue]Installing {len(system_dependencies)} system "
+                f"{plural('package', len(system_dependencies))}:[/blue]\n"
+                f"[dim]{', '.join(system_dependencies)}[/dim]"
+            )
+            _install(
+                prog,
+                "Installing system packages",
+                [tlmgr_path, "install", *system_dependencies, "--machine-readable"],
             )
 
-            progress.console.print(
-                f"[blue]Installing {len(system_dependencies)} system {inflect_engine.plural('package', len(system_dependencies))}:[/blue]\n[dim]{', '.join(system_dependencies)}[/dim]"
-            )
-
-            cmd: list[str] = [
-                tlmgr_path,
-                "install",
-                *system_dependencies,
-                "--machine-readable",
-            ]
-
-            _debug_cmd(cmd, progress.console)
-            install_process = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-            )
-
-            ignore_output = False
-            total = None
-            for line in install_process.stdout:
-                if DEBUG:
-                    progress.console.print(f"[dim]{escape(line.rstrip())}[/dim]")
-                stripped_line = line.strip()
-                if stripped_line.startswith("total-bytes"):
-                    parts = stripped_line.split("\t")
-                    if len(parts) >= 2:
-                        total_bytes = parts[1]
-                        progress.console.print(
-                            f"[dim]Total bytes to download: {total_bytes}[/dim]"
-                        )
-                        total = int(total_bytes)
-                        progress.update(install_task, total=total)
-                if (
-                    "is not relocatable, cannot install it in user mode!"
-                    in stripped_line
-                ):
-                    parts = stripped_line.split()
-                    if len(parts) >= 2:
-                        pkg_name = parts[2]
-                        progress.console.print(
-                            f"[yellow]Warning: Package '{pkg_name}' is not relocatable and cannot be installed in user mode. Skipping.[/yellow]"
-                        )
-                        # system_dependencies.append(pkg_name)
-
-                if not ignore_output:
-                    progress.console.print(stripped_line)
-                    if stripped_line.count("\t") == 9:
-                        # progress.console.print(stripped_line.count("\t"))
-                        parts = stripped_line.split("\t")
-                        # progress.console.print(f"[dim]Parsed parts: {parts}[/dim]")
-                        progress.advance(install_task, int(parts[4]))
-                    elif stripped_line.count("\t") >= 2:
-                        progress.console.print(
-                            f"[red]Unexpected tab output: {stripped_line}[/red]"
-                        )
-
-                if stripped_line == "end-of-updates":
-                    progress.update(
-                        install_task,
-                        description="Running post-installation scripts...",
-                        total=None,
-                    )
-
-                    ignore_output = True
-
-    progress.update(
-        install_task, completed=len(all_dependencies), total=len(all_dependencies)
+    note(
+        title=f"Synced {len(all_dependencies)} {plural('dependency', len(all_dependencies))} into .texenv/",
+        content=[escape(", ".join(sorted(all_dependencies)))],
     )
-
-    progress.console.print(
-        f"[green]✔ Successfully synced {len(all_dependencies)} {inflect_engine.plural('dependency', len(all_dependencies))} into .texenv/[/green]"
-        f"\n[dim]{', '.join(all_dependencies)}[/dim]"
-    )
+    outro("[green]✔ Sync complete[/green]")
 
 
 def _run_latexmk(*, strict: bool, preview: bool) -> None:
@@ -811,7 +742,7 @@ def _run_latexmk(*, strict: bool, preview: bool) -> None:
         if not preview:
             raise
         return
-    console.print("\n[green]✔ Build completed successfully![/green]")
+    outro("[green]✔ Build completed successfully![/green]")
 
 
 StrictOpt = Annotated[
@@ -823,6 +754,7 @@ StrictOpt = Annotated[
 @app.command()
 def build(strict: StrictOpt = False, debug: DebugOpt = False) -> None:
     """Generate .latexmkrc and compile the project."""
+    _intro("texi build")
     output_file = Path.cwd() / "build" / "main.pdf"
     if output_file.exists():
         console.print(f"[dim]Removing existing output file: {output_file}[/dim]")
@@ -833,6 +765,7 @@ def build(strict: StrictOpt = False, debug: DebugOpt = False) -> None:
 @app.command()
 def preview(strict: StrictOpt = False, debug: DebugOpt = False) -> None:
     """Build, open the viewer, and rebuild on every change (latexmk -pvc). Ctrl-C to stop."""
+    _intro("texi preview")
     _run_latexmk(strict=strict, preview=True)
 
 
@@ -906,12 +839,19 @@ def info():
         )
         return
 
-    console.print("[bold blue]Current texi environment info:[/bold blue]")
-    console.print(f"Environment directory: {env_dir.resolve()}")
-    console.print(f"TLPDB path: {tlpdb_path.resolve()}")
-    console.print(f"Tlmgr path: {tlmgr_path}")
-    console.print(f"Latexmk path: {latexmk_path}")
-    console.print(f"Tex-fmt path: {texfmt_path}")
+    note(
+        title="Current texi environment",
+        content=[
+            escape(f"{k}: {v}")
+            for k, v in {
+                "Environment directory": env_dir.resolve(),
+                "TLPDB path": tlpdb_path.resolve(),
+                "Tlmgr path": tlmgr_path,
+                "Latexmk path": latexmk_path,
+                "Tex-fmt path": texfmt_path,
+            }.items()
+        ],
+    )
 
 
 @app.command()
@@ -922,8 +862,13 @@ def doctor(engine: str = "pdflatex") -> None:
     except (sh.ErrorReturnCode, sh.CommandNotFound) as e:
         console.print(f"[red]{escape(str(e))}[/red]")
         raise typer.Exit(1) from e
-    for key, value in report.items():
-        console.print(f"[bold]{key}[/bold]: {escape(', '.join(value) if isinstance(value, list) else value)}")
+    note(
+        title=f"{engine} environment",
+        content=[
+            escape(f"{k}: {', '.join(v) if isinstance(v, list) else v}")
+            for k, v in report.items()
+        ],
+    )
     if len(report["formats"]) > 1:
         console.print(
             "[yellow]Multiple formats found; a stale user format may shadow the "
@@ -933,9 +878,14 @@ def doctor(engine: str = "pdflatex") -> None:
 
 @app.command()
 def formats(
-    user: bool = typer.Option(False, "--user", help="Rebuild user formats (fmtutil-user)."),
+    user: bool = typer.Option(
+        False, "--user", help="Rebuild user formats (fmtutil-user)."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the sudo confirmation."),
 ) -> None:
     """Rebuild LaTeX formats (system via sudo by default)."""
+    if not (user or yes or _confirm("Run `sudo fmtutil-sys --all`?", default=True)):
+        raise typer.Exit(1)
     try:
         console.print(escape(tools.fmtutil_user() if user else tools.fmtutil_sys()))
     except sh.ErrorReturnCode as e:
@@ -944,8 +894,17 @@ def formats(
 
 
 @app.command()
-def update() -> None:
+def update(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the sudo confirmation."),
+) -> None:
     """Update TeX Live (sudo tlmgr update --self --all), then rebuild formats."""
+    if not (
+        yes
+        or _confirm(
+            "Run `sudo tlmgr update --self --all` and rebuild formats?", default=True
+        )
+    ):
+        raise typer.Exit(1)
     try:
         console.print(escape(tools.tlmgr_update()))
         console.print(escape(tools.fmtutil_sys()))
