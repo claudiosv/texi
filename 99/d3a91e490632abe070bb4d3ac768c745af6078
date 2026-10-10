@@ -1,0 +1,62 @@
+src/texi/config.py
+  s_5b8b9927bc36a7::t_a8d864862a5e99 87-89
+src/texi/cli.py
+  s_5b8b9927bc36a7::t_904ec9804d52dd 775-776
+  s_5b8b9927bc36a7::t_c4e2b1de027f5a 458-472,481-515
+  s_7d7b98c3334f86::t_f328af761f6691 30-51,53-58,169,568-569,571,626,635-636,701,709-710
+  s_5b8b9927bc36a7::t_ad3b71cf004037 123-131,142-144,152-156
+  s_7d7b98c3334f86::t_2258256414187c 12,25,457,879-916
+  s_7d7b98c3334f86::t_470ec9ccf9283a 178-182
+  s_5856dd6c6255da::t_37d387e8ce899f 363
+  s_5b8b9927bc36a7::t_dea05b75da78fe 396-398,402-408,410-413,417-424,429-433,435-451
+  s_5b8b9927bc36a7::t_ef56ad4a84513d 3
+  s_5b8b9927bc36a7::t_07ab503c4062b9 316-342,347-349
+  s_5856dd6c6255da::t_dd42e85b72c437 52
+  s_5b8b9927bc36a7::t_b08bf81abd3667 409,414-416,425-428
+  s_5b8b9927bc36a7::t_ed75a5027c7dbe 434
+  s_5b8b9927bc36a7::t_7ba2cfdee9753a 473-480
+  s_5856dd6c6255da::t_deed16bfea9e33 157-158,452-453,917-918
+README.md
+  s_5b8b9927bc36a7::t_3c5463c95dabd1 46-52
+  s_5b8b9927bc36a7::t_03c60e4aa0c7bc 9
+  s_5b8b9927bc36a7::t_ad6020e49c9454 27-31
+src/texi/tools.py
+  s_7d7b98c3334f86::t_7d1c6afa6dacf1 22-23
+  s_7d7b98c3334f86::t_9bc0fb94bd8e12 1-21,24-60
+pyproject.toml
+  s_5856dd6c6255da::t_308fb8e85ba440 16
+uv.lock
+  s_7d7b98c3334f86::t_19810e7ca38877 2,7,9,11,16,18,20,25,29,31,33,38,40,42,93,95,97,145,153,155,160,165,167-288,293,295,297,315-340,342,344,357,365,377,379,381-397,402,407,409,414,422,424,429,431,433,438,443,445
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "99d3a91e490632abe070bb4d3ac768c745af6078",
+  "prompts": {},
+  "sessions": {
+    "s_5856dd6c6255da": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8ffc8fc3-0570-4aef-bbab-960c6b3cf275",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Claudio Spiess <claudiosv@users.noreply.github.com>"
+    },
+    "s_5b8b9927bc36a7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6fa14206-e9fa-4d0b-9b57-060af4e50db5",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Claudio Spiess <claudiosv@users.noreply.github.com>"
+    },
+    "s_7d7b98c3334f86": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "572b80fa-026e-4d87-9eee-b8a8a222bbee",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Claudio Spiess <claudiosv@users.noreply.github.com>"
+    }
+  }
+}
