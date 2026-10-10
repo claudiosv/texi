@@ -74,6 +74,8 @@ class LatexmkPrograms(BaseModel):
 
 class LatexmkExecution(BaseModel):
     halt_on_error: bool = True
+    # -f: keep processing past errors (rc variable $force_mode)
+    force_mode: bool = False
     bibtex_use: BibtexUse = BibtexUse.ALWAYS
     max_repeat: int = Field(default=5, ge=1, le=20)
     # Continuous preview mode (-pvc) and one-shot preview (-p)

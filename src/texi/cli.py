@@ -6,7 +6,7 @@ import subprocess
 import tomllib
 from collections.abc import Generator
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import inflect
 import sh
@@ -30,15 +30,26 @@ console = Console()
 DEBUG = False
 
 
-@app.callback()
-def main(
-    debug: bool = typer.Option(
-        False, "--debug", help="Print every tlmgr command and its full output."
-    ),
-) -> None:
-    """texi: LaTeX Project Workspace Manager."""
+def _set_debug(value: bool) -> None:
     global DEBUG
-    DEBUG = debug
+    DEBUG = DEBUG or value
+
+
+# Accepted both before the command (`texi --debug sync`) and after it.
+DebugOpt = Annotated[
+    bool,
+    typer.Option(
+        "--debug",
+        callback=_set_debug,
+        is_eager=True,
+        help="Print every tlmgr command and its full output.",
+    ),
+]
+
+
+@app.callback()
+def main(debug: DebugOpt = False) -> None:
+    """texi: LaTeX Project Workspace Manager."""
 
 
 def _debug_cmd(cmd: list[str], out: Console | None = None) -> None:
@@ -459,6 +470,7 @@ def init(
     force: bool = typer.Option(
         False, "--force", help="Overwrite an existing texproject.toml."
     ),
+    debug: DebugOpt = False,
 ) -> None:
     """Creates a texproject.toml, scanning any .tex files for package dependencies."""
     cwd = Path.cwd()
@@ -514,7 +526,7 @@ def init(
 
 
 @app.command()
-def sync() -> None:
+def sync(debug: DebugOpt = False) -> None:
     r"""Creates a local texmf tree and installs project dependencies.
     fieldname "\t" value
     ...
@@ -761,18 +773,17 @@ def sync() -> None:
     )
 
 
-@app.command()
-def build() -> None:
-    """Generates .latexmkrc and compiles the project."""
+def _run_latexmk(*, strict: bool, preview: bool) -> None:
+    """Generate .latexmkrc (with CLI overrides) and run latexmk in the project."""
     cwd = Path.cwd()
     env_dir = cwd / ".texenv"
 
-    output_file = cwd / "build" / "main.pdf"
-    if output_file.exists():
-        console.print(f"[dim]Removing existing output file: {output_file}[/dim]")
-        output_file.unlink()
-
     config = load_project_config(cwd / "texproject.toml")
+    execution = config.latexmk.execution
+    execution.halt_on_error = strict
+    execution.force_mode = not strict
+    execution.preview_mode = False
+    execution.preview_continuous_mode = preview
     generate_latexmkrc(config, cwd / ".latexmkrc")
     console.print("[dim]Generated .latexmkrc from texproject.toml[/dim]")
 
@@ -786,16 +797,43 @@ def build() -> None:
             "[yellow]Warning: .texenv not found. Run `texi sync` for isolated dependencies.[/yellow]"
         )
 
+    cmd = ["latexmk", "-g"]
+    if not strict:
+        cmd.append("-interaction=nonstopmode")
+    _debug_cmd(cmd)
     console.print("[bold blue]Starting latexmk...[/bold blue]\n")
     try:
-        subprocess.run(
-            ["latexmk"], env=env, check=True, capture_output=False, text=True
-        )
-        console.print("\n[green]✔ Build completed successfully![/green]")
+        subprocess.run(cmd, env=env, check=True)
     except subprocess.CalledProcessError as e:
         console.print("\n[red]✖ Build failed. Check the logs above.[/red]")
-        console.print(f"[dim]{e.stderr}[/dim]")
         raise typer.Exit(code=1) from e
+    except KeyboardInterrupt:  # normal way to leave -pvc
+        if not preview:
+            raise
+        return
+    console.print("\n[green]✔ Build completed successfully![/green]")
+
+
+StrictOpt = Annotated[
+    bool,
+    typer.Option("--strict", help="Stop at the first error (halt_on_error)."),
+]
+
+
+@app.command()
+def build(strict: StrictOpt = False, debug: DebugOpt = False) -> None:
+    """Generate .latexmkrc and compile the project."""
+    output_file = Path.cwd() / "build" / "main.pdf"
+    if output_file.exists():
+        console.print(f"[dim]Removing existing output file: {output_file}[/dim]")
+        output_file.unlink()
+    _run_latexmk(strict=strict, preview=False)
+
+
+@app.command()
+def preview(strict: StrictOpt = False, debug: DebugOpt = False) -> None:
+    """Build, open the viewer, and rebuild on every change (latexmk -pvc). Ctrl-C to stop."""
+    _run_latexmk(strict=strict, preview=True)
 
 
 @app.command()
