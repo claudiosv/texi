@@ -1,19 +1,20 @@
 import asyncio
 import json
+import getpass
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tomllib
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Annotated, Any
 
 import inflect
 import sh
 import typer
-from pyclack.core import ShimmerProgress, Spinner, is_cancel
+from pyclack.core import ShimmerProgress, is_cancel
 from pyclack.prompts import confirm, note, outro
 from pyclack.utils.console import console
 from pyclack.utils.styling import S_BAR_START, Color
@@ -255,8 +256,22 @@ def _get_tlmgr_info_output(
     return _parse_tlmgr_info_output(tlmgr_result, data_fields)
 
 
+def _usertree_packages(env_dir: Path) -> set[str]:
+    """Names of packages recorded in the .texenv tlpdb."""
+    tlpdb = env_dir / "tlpkg" / "texlive.tlpdb"
+    if not tlpdb.exists():
+        return set()
+    return {
+        line[5:].strip()
+        for line in tlpdb.read_text().splitlines()
+        if line.startswith("name ")
+    }
+
+
 def filter_packages(
-    packages: list[str], env_dir: Path, prog: ShimmerProgress
+    packages: list[str],
+    env_dir: Path,
+    prog: ShimmerProgress,
 ) -> tuple[list[str], list[str], list[str]]:
     """
     Queries tlmgr via JSON to categorize packages into valid (to install),
@@ -345,7 +360,12 @@ def filter_packages(
                 f"[red]Unexpected output from tlmgr info: {result.get('line', '')}[/red]"
             )
 
-    installable_local_packages = list(set(installable_local_packages))
+    # `tlmgr info` only sees the system tree; packages already in .texenv count as installed.
+    in_usertree = _usertree_packages(env_dir)
+    already_installed += [p for p in installable_local_packages if p in in_usertree]
+    installable_local_packages = [
+        p for p in set(installable_local_packages) if p not in in_usertree
+    ]
     installable_system_packages = list(set(installable_system_packages))
     already_installed = list(set(already_installed))
 
@@ -421,14 +441,14 @@ def find_bundle_for_sty(
     matched_bundles: list[str] = []
 
     # We look for paths ending in /name.sty to avoid false positives
-    target_suffix = f"/{sty_name}.sty"
-    exact_match = f"{sty_name}.sty"
+    # classes (.cls) are packages too, e.g. \\documentclass{acmart}
+    suffixes = (f"{sty_name}.sty", f"{sty_name}.cls")
 
     files_dict: dict[str, list[str]] = data.get("files", {})
 
     for bundle_name, file_paths in files_dict.items():
         for path in file_paths:
-            if path.endswith(target_suffix) or path == exact_match:
+            if path.rpartition("/")[2] in suffixes:
                 matched_bundles.append(bundle_name)
                 break  # Found it in this bundle, skip remaining files in this bundle
 
@@ -439,22 +459,33 @@ def find_bundle_for_sty(
 
 
 _TEX_PACKAGE_RE = re.compile(
-    r"\\(?:usepackage|RequirePackage)(?:\s*\[[^\]]*\])?\s*\{([^}]*)\}"
+    r"\\(?:usepackage|RequirePackage|documentclass|LoadClass)(?:WithOptions)?"
+    r"(?:\s*\[[^\]]*\])?\s*\{([^}]*)\}"
 )
 _SKIP_DIR_NAMES = {"build", ".texenv"}
+_SCAN_SUFFIXES = {".tex", ".cls", ".sty", ".bbx", ".cbx", ".def", ".ltx"}
 
 
-def extract_packages_from_tex(cwd: Path) -> list[str]:
-    r"""Recursively scans .tex files under cwd for \usepackage/\RequirePackage names."""
+def _source_files(cwd: Path) -> list[Path]:
+    """TeX source files under cwd, skipping build output, .texenv and dot-dirs."""
+    return [
+        f
+        for f in cwd.rglob("*")
+        if f.suffix in _SCAN_SUFFIXES
+        and f.is_file()
+        and not any(
+            part in _SKIP_DIR_NAMES or part.startswith(".")
+            for part in f.relative_to(cwd).parts[:-1]
+        )
+    ]
+
+
+def extract_packages_from_tex(cwd: Path, files: list[Path] | None = None) -> list[str]:
+    r"""Scan tex/cls/sty/... files for package and class names, minus ones the project ships itself."""
     packages: set[str] = set()
+    files = _source_files(cwd) if files is None else files
 
-    for tex_file in cwd.rglob("*.tex"):
-        relative_parts = tex_file.relative_to(cwd).parts[:-1]
-        if any(
-            part in _SKIP_DIR_NAMES or part.startswith(".") for part in relative_parts
-        ):
-            continue
-
+    for tex_file in files:
         try:
             text = tex_file.read_text(encoding="utf-8", errors="ignore")
         except OSError:
@@ -466,10 +497,15 @@ def extract_packages_from_tex(cwd: Path) -> list[str]:
                 if stripped_name:
                     packages.add(stripped_name)
 
-    return sorted(packages)
+    local = {f.stem for f in files if f.suffix in {".sty", ".cls"}}
+    return sorted(packages - local)
 
 
-def resolve_dependencies(packages: list[str], console: Console) -> list[str]:
+def resolve_dependencies(
+    packages: list[str],
+    console: Console,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> list[str]:
     r"""Resolves raw \usepackage names to tlmgr bundle names, using a persistent cache."""
     if tlmgr_path is None:
         console.print(
@@ -481,7 +517,9 @@ def resolve_dependencies(packages: list[str], console: Console) -> list[str]:
     cache = load_sty_cache()
     dependencies: set[str] = set()
 
-    for name in packages:
+    for i, name in enumerate(packages):
+        if on_progress:
+            on_progress(i, len(packages))
         bundles = find_bundle_for_sty(name, console, cache=cache)
         dependencies.add(bundles[0] if bundles else name)
 
@@ -491,6 +529,34 @@ def resolve_dependencies(packages: list[str], console: Console) -> list[str]:
 
 
 # --- CLI Commands ---
+
+
+@app.command()
+def scan(
+    resolve: bool = typer.Option(
+        True, "--resolve/--no-resolve", help="Resolve names to tlmgr bundles."
+    ),
+    debug: DebugOpt = False,
+) -> None:
+    """List packages and classes used by tex/cls/sty files in the current directory."""
+    _intro("texi scan")
+    files = _source_files(Path.cwd())
+    packages = extract_packages_from_tex(Path.cwd(), files)
+    note(
+        title=f"{len(packages)} package(s) across {len(files)} source file(s)",
+        content=[escape(", ".join(packages)) or "(none)"],
+    )
+    if resolve and packages:
+        with ShimmerProgress(console) as prog:
+            deps = resolve_dependencies(
+                packages,
+                console,
+                lambda done, total: prog.on_progress(
+                    "Resolving to tlmgr dependencies", done, total
+                ),
+            )
+        note(title="tlmgr dependencies", content=[escape(", ".join(deps))])
+    outro("[green]✔ Scan complete[/green]")
 
 
 @app.command()
@@ -515,26 +581,21 @@ def init(
             )
             raise typer.Exit(code=1)
 
-    tex_files = [
-        f
-        for f in cwd.rglob("*.tex")
-        if not any(
-            part in _SKIP_DIR_NAMES or part.startswith(".")
-            for part in f.relative_to(cwd).parts[:-1]
-        )
-    ]
-    packages = extract_packages_from_tex(cwd)
+    tex_files = _source_files(cwd)
+    packages = extract_packages_from_tex(cwd, tex_files)
 
     if packages:
-        spin = Spinner()
-        spin.start(
-            f"Found {len(packages)} package(s) across {len(tex_files)} .tex file(s), "
-            "resolving to tlmgr dependencies"
+        console.print(
+            f"Found {len(packages)} package(s) across {len(tex_files)} source file(s)"
         )
-        try:
-            dependencies = resolve_dependencies(packages, console)
-        finally:
-            spin.stop(f"Resolved {len(packages)} package(s) to tlmgr dependencies")
+        with ShimmerProgress(console) as prog:
+            dependencies = resolve_dependencies(
+                packages,
+                console,
+                lambda done, total: prog.on_progress(
+                    "Resolving to tlmgr dependencies", done, total
+                ),
+            )
     else:
         dependencies = []
         if tex_files:
@@ -596,8 +657,74 @@ def _install(prog: ShimmerProgress, phase: str, cmd: list[str]) -> None:
     process.wait()
 
 
+def _ensure_tl_writable() -> None:
+    """tlmgr needs a writable TeX Live tree; offer to chown it to the current user."""
+    root = _run(["kpsewhich", "-var-value=TEXMFROOT"]).stdout.strip()
+    if not root or os.access(Path(root) / "tlpkg", os.W_OK):
+        return
+    target = Path(
+        root
+    ).parent  # e.g. /usr/local/texlive, so yearly upgrades keep working
+    if not _confirm(
+        f"{target} is not writable, so tlmgr can't install packages. "
+        f"Run `sudo chown -R {getpass.getuser()} {target}`?",
+        default=True,
+    ):
+        raise typer.Exit(code=1)
+    cmd = ["sudo", "chown", "-R", getpass.getuser(), str(target)]
+    _debug_cmd(cmd)
+    if subprocess.run(cmd).returncode != 0:
+        console.print("[red]chown failed.[/red]")
+        raise typer.Exit(code=1)
+
+
+def _update_tlmgr() -> None:
+    """Run `tlmgr update --self` and log whether it updated tlmgr."""
+    console.print("[dim]Updating tlmgr...[/dim]")
+    result = _run([tlmgr_path, "update", "--self"])
+    out = result.stdout + result.stderr
+    if result.returncode != 0:
+        console.print(
+            "[yellow]tlmgr update failed (run with --debug for details).[/yellow]"
+        )
+    elif "no self-updates" in out:
+        console.print("[green]✔ tlmgr already up to date[/green]")
+    else:
+        console.print("[green]✔ tlmgr updated[/green]")
+
+
+def _ensure_latexmk() -> None:
+    """Install latexmk into the system TeX Live if it's not on PATH."""
+    if shutil.which("latexmk"):
+        return
+    if not tlmgr_path:
+        console.print("[red]latexmk and tlmgr not found; install TeX Live.[/red]")
+        raise typer.Exit(code=1)
+    _ensure_tl_writable()
+    install = [tlmgr_path, "install", "latexmk", "--machine-readable"]
+    for attempt in range(2):
+        with ShimmerProgress(console) as prog:
+            _install(prog, "Installing latexmk", install)
+        if shutil.which("latexmk"):
+            return
+        if attempt == 0:  # tlmgr refuses to install anything while it is outdated
+            console.print(
+                "[yellow]Install failed; updating tlmgr and retrying.[/yellow]"
+            )
+            _update_tlmgr()
+    console.print("[red]Could not install latexmk. Try `tlmgr install latexmk`.[/red]")
+    raise typer.Exit(code=1)
+
+
 @app.command()
-def sync(debug: DebugOpt = False) -> None:
+def sync(
+    no_update: bool = typer.Option(
+        False,
+        "--no-update",
+        help="Don't update the project's packages after installing.",
+    ),
+    debug: DebugOpt = False,
+) -> None:
     r"""Creates a local texmf tree and installs project dependencies.
     fieldname "\t" value
     ...
@@ -619,6 +746,10 @@ def sync(debug: DebugOpt = False) -> None:
     config = load_project_config(cwd / "texproject.toml")
     env_dir = cwd / ".texenv"
 
+    if tlmgr_path:
+        _ensure_tl_writable()
+        _update_tlmgr()
+    _ensure_latexmk()
     if not config.dependencies:
         console.print(
             "[yellow]No dependencies found in texproject.toml. Nothing to sync.[/yellow]"
@@ -651,7 +782,7 @@ def sync(debug: DebugOpt = False) -> None:
         n = len(config.dependencies)
         console.print(
             f"[blue]Fetching metadata for {n} {plural('package', n)}:[/blue]\n"
-            f"[dim]{', '.join(config.dependencies)}[/dim]"
+            f"[dim]{', '.join(sorted(config.dependencies))}[/dim]"
         )
         valid_dependencies, system_dependencies, already_installed = filter_packages(
             config.dependencies, env_dir, prog
@@ -659,17 +790,18 @@ def sync(debug: DebugOpt = False) -> None:
         all_dependencies = set(
             valid_dependencies + system_dependencies + already_installed
         )
-        console.print(
-            f"[green]✔ Skipping {len(already_installed)} already installed "
-            f"{plural('package', len(already_installed))}:[/green]\n"
-            f"[dim]{', '.join(already_installed)}[/dim]"
-        )
+        if already_installed:
+            console.print(
+                f"[green]✔ Skipping {len(already_installed)} already installed "
+                f"{plural('package', len(already_installed))}:[/green]\n"
+                f"[dim]{', '.join(sorted(already_installed))}[/dim]"
+            )
 
         if valid_dependencies:
             console.print(
                 f"[blue]Installing {len(valid_dependencies)} relocatable "
                 f"{plural('package', len(valid_dependencies))}:[/blue]\n"
-                f"[dim]{', '.join(valid_dependencies)}[/dim]"
+                f"[dim]{', '.join(sorted(valid_dependencies))}[/dim]"
             )
             _install(
                 prog,
@@ -686,16 +818,43 @@ def sync(debug: DebugOpt = False) -> None:
             )
 
         if system_dependencies:
+            _ensure_tl_writable()
             console.print(
                 f"[blue]Installing {len(system_dependencies)} system "
                 f"{plural('package', len(system_dependencies))}:[/blue]\n"
-                f"[dim]{', '.join(system_dependencies)}[/dim]"
+                f"[dim]{', '.join(sorted(system_dependencies))}[/dim]"
             )
             _install(
                 prog,
                 "Installing system packages",
                 [tlmgr_path, "install", *system_dependencies, "--machine-readable"],
             )
+
+    if not no_update:
+        in_usertree = _usertree_packages(env_dir)
+        local = sorted(all_dependencies & in_usertree)
+        system = sorted(all_dependencies - in_usertree)
+        with ShimmerProgress(console) as prog:
+            if local:
+                _install(
+                    prog,
+                    "Updating local packages",
+                    [
+                        tlmgr_path,
+                        "update",
+                        "--usertree",
+                        str(env_dir),
+                        "--usermode",
+                        "--machine-readable",
+                        *local,
+                    ],
+                )
+            if system:
+                _install(
+                    prog,
+                    "Updating system packages",
+                    [tlmgr_path, "update", "--machine-readable", *system],
+                )
 
     note(
         title=f"Synced {len(all_dependencies)} {plural('dependency', len(all_dependencies))} into .texenv/",
@@ -728,6 +887,7 @@ def _run_latexmk(*, strict: bool, preview: bool) -> None:
             "[yellow]Warning: .texenv not found. Run `texi sync` for isolated dependencies.[/yellow]"
         )
 
+    _ensure_latexmk()
     cmd = ["latexmk", "-g"]
     if not strict:
         cmd.append("-interaction=nonstopmode")
