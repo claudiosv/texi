@@ -3,6 +3,7 @@ import json
 import getpass
 import os
 import re
+import textwrap
 import shutil
 import subprocess
 import sys
@@ -62,6 +63,13 @@ def _debug_cmd(cmd: list[str], out: Console | None = None) -> None:
 def _intro(title: str) -> None:
     """pyclack's intro bar, minus its console.clear() (which wipes build logs)."""
     console.print(Text.from_markup(f"{Color.gray(S_BAR_START)}  {title}"))
+
+
+def _note(title: str, content: list[str]) -> None:
+    """pyclack note, with lines wrapped so the box fits the terminal."""
+    width = max(20, console.width - 8)
+    lines = [w for line in content for w in textwrap.wrap(line, width) or [""]]
+    note(title=title, content=lines)
 
 
 def _confirm(message: str, *, default: bool = False) -> bool:
@@ -542,7 +550,7 @@ def scan(
     _intro("texi scan")
     files = _source_files(Path.cwd())
     packages = extract_packages_from_tex(Path.cwd(), files)
-    note(
+    _note(
         title=f"{len(packages)} package(s) across {len(files)} source file(s)",
         content=[escape(", ".join(packages)) or "(none)"],
     )
@@ -555,7 +563,7 @@ def scan(
                     "Resolving to tlmgr dependencies", done, total
                 ),
             )
-        note(title="tlmgr dependencies", content=[escape(", ".join(deps))])
+        _note(title="tlmgr dependencies", content=[escape(", ".join(deps))])
     outro("[green]✔ Scan complete[/green]")
 
 
@@ -856,7 +864,7 @@ def sync(
                     [tlmgr_path, "update", "--machine-readable", *system],
                 )
 
-    note(
+    _note(
         title=f"Synced {len(all_dependencies)} {plural('dependency', len(all_dependencies))} into .texenv/",
         content=[escape(", ".join(sorted(all_dependencies)))],
     )
@@ -999,7 +1007,7 @@ def info():
         )
         return
 
-    note(
+    _note(
         title="Current texi environment",
         content=[
             escape(f"{k}: {v}")
@@ -1022,7 +1030,7 @@ def doctor(engine: str = "pdflatex") -> None:
     except (sh.ErrorReturnCode, sh.CommandNotFound) as e:
         console.print(f"[red]{escape(str(e))}[/red]")
         raise typer.Exit(1) from e
-    note(
+    _note(
         title=f"{engine} environment",
         content=[
             escape(f"{k}: {', '.join(v) if isinstance(v, list) else v}")
