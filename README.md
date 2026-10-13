@@ -10,7 +10,7 @@ An isolated workspace manager for LaTeX projects.
 |---|---|
 | `texi init` | Creates `texproject.toml` (`[project]` with `name` = directory name, `src_dir = "src"`), seeding `dependencies` by scanning `.tex` files for `\usepackage`/`\RequirePackage`. |
 | `texi add <pkg>...` | Adds packages to `dependencies` and installs them. A name that isn't a TeX Live package (e.g. `binhex`) is resolved to the package that ships it (`kastrup`), asking you to confirm or choose. `--sync` runs a full sync afterwards. |
-| `texi sync` | Installs all `dependencies` into `.texenv/`, then updates them (`--no-update` to skip). |
+| `texi sync` | Installs all `dependencies` into `.texenv/`, then updates them (`--no-update` to skip), and records the installed revisions in `texi.lock`. |
 | `texi build` | Generates `.latexmkrc` from the config and runs `latexmk`. `--strict` stops at the first error, `--full` forces a full rebuild (`go_mode = "full-rebuild"`), `--rm-pdf` deletes the old PDF first. |
 | `texi preview` | Like `build`, but opens the viewer and rebuilds on every change (`latexmk -pvc`). |
 | `texi export <markdown\|html\|tex4ht\|latexml>` | Converts to `build/export/<format>/`: Markdown or HTML via pandoc (with citeproc and MathJax), HTML via TeX4ht (`make4ht`, needs `luaxml`) or LaTeXML (`latexmlc`). |
@@ -73,6 +73,9 @@ bibtex_use = "always"
 | key | default | description |
 |---|---|---|
 | `name` | none | Project name. Used as the latexmk `$jobname` (so the PDF is `<name>.pdf`) unless `build.jobname` is set. `texi init` sets it to the directory name. |
+| `main` | `"main.tex"` | The main `.tex` file, relative to `src_dir`. `build.default_files` overrides it (and allows several). |
+| `texlive` | none | Expected TeX Live year, e.g. `"2026"`. texi warns if the installed year differs. |
+| `repository` | none | tlmgr repository to install from, passed as `tlmgr --repository`. Point it at a frozen tlnet to really pin versions. |
 | `src_dir` | `"src"` | Directory holding the `.tex` sources. texi runs `latexmk -cd <src_dir>/<main file>`. Use `"."` for sources in the project root (then latexmk picks up `*.tex` itself). |
 | `dependencies` | `[]` | `tlmgr` package names installed into `.texenv/` by `texi sync` / `texi add`. |
 
@@ -81,7 +84,7 @@ When `src_dir` is not `"."`, the generated `.latexmkrc` stays at the project roo
 - anchors `out_dir`/`aux_dir` at the project root (otherwise `-cd` would put them inside `src/`),
 - prepends `<root>/<src_dir>//` to `BIBINPUTS` and `TEXINPUTS`, so biber/bibtex running from the aux dir still find your `.bib` files.
 
-The main file is `build.default_files[0]` (relative to `src_dir`), else `main.tex`.
+The main file is `build.default_files[0]` if set, else `project.main` (both relative to `src_dir`).
 
 ### `[build]`
 
@@ -105,6 +108,19 @@ One flat table. The keys are grouped below by what they control.
 | `"dvi2pdf"` | 3 | latex → dvipdf |
 | `"lualatex"` | 4 | lualatex straight to PDF; best Unicode and OpenType font support |
 | `"xelatex"` | 5 | xelatex; Unicode and system fonts |
+
+#### Engine options
+
+| key | default | description |
+|---|---|---|
+| `synctex` | `true` | Add `-synctex=1` to every engine command (pdflatex, lualatex, xelatex, latex). |
+| `shell_escape` | `false` | Add `-shell-escape`. |
+| `extra_args` | `[]` | Extra arguments for every engine command, e.g. `["-file-line-error"]`. |
+| `env` | `{}` | Extra environment variables for the build, as a `[build.env]` table. |
+| `bib_dirs` | `[]` | Extra directories (relative to the project root, or absolute) searched recursively for `.bib` files (`BIBINPUTS`). |
+| `tex_inputs` | `[]` | Same, for TeX files (`TEXINPUTS`). `src_dir` is always included. |
+
+Flags already present in a `lualatex = "…"` style override aren't repeated.
 
 #### Directories
 
@@ -183,6 +199,10 @@ Settings for `texi fmt`, rendered as a tex-fmt config and piped to `tex-fmt --co
 | `no_indent_envs` | `[]` | Extra environments whose contents aren't indented. |
 | `wrap_chars` | `[]` | Extra characters lines may be broken after. |
 | `format_tables` | `false` | Format tables. |
+
+## Lockfile
+
+`texi sync` and `texi add` write `texi.lock` next to `texproject.toml`: the TeX Live year, the repository (if set) and the installed revision of every dependency. Commit it. When a later sync changes a revision, texi lists the differences. tlmgr can only install what its repository currently offers, so to get the same revisions again, set `repository` to a frozen tlnet (for example a historic TeX Live archive for that year).
 
 ## Development
 

@@ -178,10 +178,26 @@ class BuildConfig(
 
     model_config = ConfigDict(extra="forbid")
 
+    # Added to every TeX engine command (pdflatex, lualatex, xelatex, latex)
+    synctex: bool = True
+    shell_escape: bool = False
+    extra_args: list[str] = Field(default_factory=list)
+    # Extra environment variables for the build, e.g. [build.env]
+    env: dict[str, str] = Field(default_factory=dict)
+    # Extra directories (relative to the project root) searched for .bib / TeX files
+    bib_dirs: list[str] = Field(default_factory=list)
+    tex_inputs: list[str] = Field(default_factory=list)
+
 
 class ProjectConfig(BaseModel):
     # Project name; used as the latexmk jobname unless build.jobname is set
     name: str | None = None
+    # Main .tex file, relative to src_dir
+    main: str = "main.tex"
+    # Expected TeX Live year (e.g. "2026"); texi warns if the installed one differs
+    texlive: str | None = None
+    # tlmgr repository to install from; point at a frozen tlnet to truly pin versions
+    repository: str | None = None
     # Directory holding the .tex sources; "." = project root. latexmk runs with -cd.
     src_dir: str = "src"
     dependencies: list[str] = Field(default_factory=list)
@@ -225,8 +241,8 @@ class TexProjectConfig(BaseModel):
 
     @property
     def main_files(self) -> list[str]:
-        """Main .tex files relative to src_dir (default_files, else main.tex)."""
-        return self.build.default_files or ["main.tex"]
+        """Main .tex files relative to src_dir (build.default_files, else project.main)."""
+        return self.build.default_files or [self.project.main]
 
     @property
     def set_jobname(self) -> str | None:
