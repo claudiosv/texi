@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
+from enum import Enum
 from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Annotated, Any
@@ -16,7 +17,7 @@ import inflect
 import sh
 import typer
 from pyclack.core import ShimmerProgress, is_cancel
-from pyclack.prompts import confirm, note, outro
+from pyclack.prompts import Option, confirm, note, outro, select
 from pyclack.utils.console import console
 from pyclack.utils.styling import S_BAR_START, Color
 from pydantic import ValidationError
@@ -27,7 +28,7 @@ from rich.text import Text
 from rich.tree import Tree
 
 from texi import tools
-from texi.config import TexProjectConfig
+from texi.config import ProjectConfig, TexFmtConfig, TexProjectConfig
 
 app = typer.Typer(help="texi: LaTeX Project Workspace Manager")
 DEBUG = False
@@ -77,6 +78,35 @@ def _confirm(message: str, *, default: bool = False) -> bool:
     return not is_cancel(answer) and bool(answer)
 
 
+def _select(message: str, choices: list[str]) -> str | None:
+    answer = asyncio.run(select(message=message, options=[Option(c, c) for c in choices]))
+    return None if is_cancel(answer) else answer
+
+
+def _texenv_vars(env_dir: Path) -> dict[str, str]:
+    """TeX env vars that point TeX (and updmap's generated font maps) at .texenv/."""
+    root = env_dir.resolve()
+    return {
+        "TEXMFHOME": str(root),
+        "TEXMFVAR": str(root / "texmf-var"),
+        "TEXMFCONFIG": str(root / "texmf-config"),
+    }
+
+
+def _updmap_local(env_dir: Path) -> None:
+    """Regenerate font maps for packages in .texenv/ (tlmgr usermode doesn't)."""
+    if not shutil.which("updmap-user"):
+        return
+    env = os.environ | _texenv_vars(env_dir)
+    cmd = ["updmap-user"]
+    _debug_cmd(cmd)
+    # updmap-user exits non-zero on harmless warnings; the maps are still written
+    result = subprocess.run(cmd, env=env, capture_output=True, text=True, check=False)
+    if DEBUG:
+        console.print(f"[dim]{escape(result.stdout + result.stderr)}[/dim]")
+    console.print("[green]✔ Font maps updated[/green]")
+
+
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     """Run a command, echoing it and its stdout/stderr under --debug."""
     _debug_cmd(cmd)
@@ -88,6 +118,9 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
         )
     return result
 
+
+# Pass the generated .latexmkrc to latexmk via `-norc -r` so it is read exactly once.
+EXPLICIT_RC = True
 
 tlmgr_path = shutil.which("tlmgr")
 latexmk_path = shutil.which("latexmk")
@@ -170,6 +203,29 @@ def generate_latexmkrc(config: TexProjectConfig, rc_path: Path) -> None:
 
     # mode='json' ensures all enums are reduced to their primitive values
     config_dict = config.latexmk.model_dump(mode="json")
+    config_dict["files"]["jobname"] = config.set_jobname
+
+    in_subdir = config.src_dir not in ("", ".")
+    rc_lines += [
+        "use Cwd qw(abs_path);",
+        "use File::Basename qw(dirname);",
+        "my $root = dirname(abs_path(__FILE__));  # project root, wherever latexmk runs",
+        'if (-d "$root/.texenv") {',
+        '  $ENV{TEXMFHOME} = "$root/.texenv";',
+        '  $ENV{TEXMFVAR} = "$root/.texenv/texmf-var";  # font maps from updmap-user',
+        '  $ENV{TEXMFCONFIG} = "$root/.texenv/texmf-config";',
+        "}",
+        '$ENV{max_print_line} = "100000";  # avoid line wrapping in logs',
+    ]
+    if in_subdir:
+        # latexmk -cd moves into src_dir, so anchor build dirs and TeX/BibTeX
+        # search paths at the project root.
+        src = config.src_dir.strip("/")
+        rc_lines += [
+            f"$ENV{{BIBINPUTS}} = \"$root/{src}//:\" . ($ENV{{BIBINPUTS}} // '');",
+            f"$ENV{{TEXINPUTS}} = \"$root/{src}//:\" . ($ENV{{TEXINPUTS}} // '');",
+        ]
+    rc_lines.append("")
 
     for section_name, settings in config_dict.items():
         rc_lines.append(f"# --- {section_name.capitalize()} ---")
@@ -177,6 +233,14 @@ def generate_latexmkrc(config: TexProjectConfig, rc_path: Path) -> None:
             if key == "optimize_pdf" or value is None:
                 continue
             if isinstance(value, list) and not value:
+                continue
+            if in_subdir and key in ("out_dir", "aux_dir") and not os.path.isabs(value):
+                rc_lines.append(f'${key} = "$root/{value}";')
+                continue
+            if in_subdir and key == "default_files":
+                continue  # passed on the command line, relative to src_dir
+            if key in ("clean_ext", "clean_full_ext"):
+                rc_lines.append(f"${key} = '{' '.join(value)}';")  # space-separated string
                 continue
 
             perl_val = format_perl_value(key, value)
@@ -405,7 +469,10 @@ def save_sty_cache(cache: dict[str, list[str]]) -> None:
 
 
 def find_bundle_for_sty(
-    sty_name: str, console: Console, cache: dict[str, list[str]] | None = None
+    sty_name: str,
+    console: Console,
+    cache: dict[str, list[str]] | None = None,
+    exts: tuple[str, ...] = (".sty", ".cls"),
 ) -> list[str]:
     """
     Searches CTAN via tlmgr to find which package bundles
@@ -450,7 +517,7 @@ def find_bundle_for_sty(
 
     # We look for paths ending in /name.sty to avoid false positives
     # classes (.cls) are packages too, e.g. \\documentclass{acmart}
-    suffixes = (f"{sty_name}.sty", f"{sty_name}.cls")
+    suffixes = tuple(f"{sty_name}{e}" for e in exts)
 
     files_dict: dict[str, list[str]] = data.get("files", {})
 
@@ -614,13 +681,21 @@ def init(
             console.print("[dim]No .tex files found.[/dim]")
 
     try:
-        config = TexProjectConfig(dependencies=dependencies)
+        config = TexProjectConfig(
+            project=ProjectConfig(name=cwd.name, dependencies=dependencies)
+        )
     except ValidationError as e:
         console.print("[red]Configuration Validation Error:[/red]")
         console.print(e)
         raise typer.Exit(code=1) from e
 
-    lines = ["dependencies = ["]
+    lines = [
+        "[project]",
+        f'name = "{config.name}"',
+        f'src_dir = "{config.src_dir}"',
+        "",
+        "dependencies = [",
+    ]
     lines += [f'  "{dep}",' for dep in config.dependencies]
     lines.append("]")
     lines.append("")
@@ -724,6 +799,42 @@ def _ensure_latexmk() -> None:
     raise typer.Exit(code=1)
 
 
+def _make4ht_missing() -> list[str]:
+    """TeX Live packages make4ht needs that aren't usable yet."""
+    missing = []
+    if not shutil.which("make4ht"):
+        missing += ["make4ht", "tex4ht"]
+    if not tools.kpsewhich("luaxml-domobject.lua"):  # make4ht's domfilters require it
+        missing.append("luaxml")
+    return missing
+
+
+def _ensure_make4ht() -> None:
+    """Offer to install make4ht and its luaxml dependency into the system TeX Live."""
+    missing = _make4ht_missing()
+    if not missing:
+        return
+    if not tlmgr_path:
+        console.print("[red]make4ht needs TeX Live (tlmgr not found).[/red]")
+        raise typer.Exit(code=1)
+    console.print(f"[yellow]make4ht is not usable; missing: {', '.join(missing)}[/yellow]")
+    if not (sys.stdin.isatty() and _confirm(f"Install {', '.join(missing)} with tlmgr?", default=True)):
+        console.print(f"Install with: tlmgr install {' '.join(missing)}")
+        raise typer.Exit(code=1)
+    _ensure_tl_writable()
+    install = [tlmgr_path, "install", *missing, "--machine-readable"]
+    for attempt in range(2):
+        with ShimmerProgress(console) as prog:
+            _install(prog, "Installing make4ht", install)
+        if not _make4ht_missing():
+            return
+        if attempt == 0:  # tlmgr refuses to install while it is outdated
+            console.print("[yellow]Install failed; updating tlmgr and retrying.[/yellow]")
+            _update_tlmgr()
+    console.print(f"[red]Could not install. Try `tlmgr install {' '.join(missing)}`.[/red]")
+    raise typer.Exit(code=1)
+
+
 @app.command()
 def sync(
     no_update: bool = typer.Option(
@@ -750,15 +861,19 @@ def sync(
     --package-logfile file
     """
     _intro("texi sync")
-    cwd = Path.cwd()
-    config = load_project_config(cwd / "texproject.toml")
-    env_dir = cwd / ".texenv"
+    config = load_project_config(Path.cwd() / "texproject.toml")
+    _sync(config.dependencies, no_update=no_update)
+
+
+def _sync(packages: list[str], *, no_update: bool) -> None:
+    """Install `packages` into .texenv/ (and update them unless no_update)."""
+    env_dir = Path.cwd() / ".texenv"
 
     if tlmgr_path:
         _ensure_tl_writable()
         _update_tlmgr()
     _ensure_latexmk()
-    if not config.dependencies:
+    if not packages:
         console.print(
             "[yellow]No dependencies found in texproject.toml. Nothing to sync.[/yellow]"
         )
@@ -787,13 +902,13 @@ def sync(
                 console.print("[red]Initialization failed![/red]")
                 raise typer.Exit(code=1)
 
-        n = len(config.dependencies)
+        n = len(packages)
         console.print(
             f"[blue]Fetching metadata for {n} {plural('package', n)}:[/blue]\n"
-            f"[dim]{', '.join(sorted(config.dependencies))}[/dim]"
+            f"[dim]{', '.join(sorted(packages))}[/dim]"
         )
         valid_dependencies, system_dependencies, already_installed = filter_packages(
-            config.dependencies, env_dir, prog
+            packages, env_dir, prog
         )
         all_dependencies = set(
             valid_dependencies + system_dependencies + already_installed
@@ -807,7 +922,7 @@ def sync(
 
         if valid_dependencies:
             console.print(
-                f"[blue]Installing {len(valid_dependencies)} relocatable "
+                f"[blue]Installing {len(valid_dependencies)} local "
                 f"{plural('package', len(valid_dependencies))}:[/blue]\n"
                 f"[dim]{', '.join(sorted(valid_dependencies))}[/dim]"
             )
@@ -864,6 +979,7 @@ def sync(
                     [tlmgr_path, "update", "--machine-readable", *system],
                 )
 
+    _updmap_local(env_dir)
     _note(
         title=f"Synced {len(all_dependencies)} {plural('dependency', len(all_dependencies))} into .texenv/",
         content=[escape(", ".join(sorted(all_dependencies)))],
@@ -871,7 +987,106 @@ def sync(
     outro("[green]✔ Sync complete[/green]")
 
 
-def _run_latexmk(*, strict: bool, preview: bool) -> None:
+def _tl_package_exists(name: str) -> bool:
+    """True if tlmgr knows `name` (locally or in the repository)."""
+    result = _tlmgr_info("--data", "name", name)
+    return any(line.strip() == name for line in result.stdout.splitlines())
+
+
+def _lookup_packages(names: list[str]) -> dict[str, list[str] | None]:
+    """Map each name to None if it's a TeX Live package, else the packages providing a file by that name."""
+    found: dict[str, list[str] | None] = {}
+    with ShimmerProgress(console) as prog:
+        prog.on_progress("Checking tlmgr info", 0, len(names))
+        for i, name in enumerate(names, 1):
+            if _tl_package_exists(name):
+                found[name] = None
+            else:
+                prog.on_progress(f"Searching for {name}", i - 1, len(names))
+                found[name] = find_bundle_for_sty(
+                    name, console, exts=(".sty", ".cls", ".tex")
+                )
+            prog.on_progress("Checking tlmgr info", i, len(names))
+    return found
+
+
+def _choose_package(name: str, candidates: list[str]) -> str | None:
+    """Ask which package to use for a name that isn't a TeX Live package.
+
+    e.g. `binhex` is a file shipped inside the `kastrup` package.
+    """
+    console.print(f"[yellow]'{escape(name)}' is not a TeX Live package.[/yellow]")
+    if not candidates:
+        console.print(f"[red]No package provides {escape(name)}; skipping.[/red]")
+        return None
+    if not sys.stdin.isatty():
+        console.print(
+            f"[red]Provided by {', '.join(candidates)}; "
+            "rerun with one of those names.[/red]"
+        )
+        return None
+    if len(candidates) == 1:
+        pkg = candidates[0]
+        ok = _confirm(f"'{name}' is provided by '{pkg}'. Add '{pkg}' instead?", default=True)
+        return pkg if ok else None
+    return _select(f"{name} is provided by several packages. Which one?", candidates)
+
+
+def _add_to_toml(path: Path, new: list[str]) -> None:
+    """Append packages to the `dependencies` array, preserving the rest of the file."""
+    text = path.read_text(encoding="utf-8")
+    entries = "".join(f'  "{p}",\n' for p in new)
+    if m := re.search(r"^dependencies\s*=\s*\[(.*?)\]", text, re.M | re.S):
+        body = m.group(1).rstrip()
+        if body and not body.endswith(","):
+            body += ","
+        body = body + "\n" if body else "\n"
+        text = text[: m.start(1)] + body + entries + text[m.end(1) :]
+    else:  # top-level keys must precede any [table]
+        block = f"dependencies = [\n{entries}]\n"
+        if h := re.search(r"^\[project\][^\n]*\n", text, re.M):
+            text = text[: h.end()] + block + text[h.end() :]
+        else:
+            text = f"[project]\n{block}\n" + text
+    path.write_text(text, encoding="utf-8")
+
+
+@app.command()
+def add(
+    packages: Annotated[list[str], typer.Argument(help="TeX Live package(s) to add.")],
+    sync_all: bool = typer.Option(
+        False, "--sync", help="Run a full sync (all dependencies, with updates)."
+    ),
+    debug: DebugOpt = False,
+) -> None:
+    """Add packages to texproject.toml and install them into .texenv/."""
+    _intro("texi add")
+    config_path = Path.cwd() / "texproject.toml"
+    config = load_project_config(config_path)
+    if not tlmgr_path:
+        console.print("[red]tlmgr not found; install TeX Live.[/red]")
+        raise typer.Exit(code=1)
+    lookup = _lookup_packages(list(dict.fromkeys(packages)))
+    resolved = [
+        n if c is None else _choose_package(n, c) for n, c in lookup.items()
+    ]
+    packages = list(dict.fromkeys(r for r in resolved if r))
+    if not packages:
+        outro("[red]Nothing to add.[/red]")
+        raise typer.Exit(code=1)
+    new = [p for p in packages if p not in config.dependencies]
+    if new:
+        _add_to_toml(config_path, new)
+        console.print(f"[green]✔ Added to {config_path.name}:[/green] {', '.join(new)}")
+    else:
+        console.print("[dim]Already in dependencies.[/dim]")
+    if sync_all:
+        _sync([*config.dependencies, *new], no_update=False)
+    else:
+        _sync(list(dict.fromkeys(packages)), no_update=True)
+
+
+def _run_latexmk(*, strict: bool, preview: bool, full: bool = False) -> None:
     """Generate .latexmkrc (with CLI overrides) and run latexmk in the project."""
     cwd = Path.cwd()
     env_dir = cwd / ".texenv"
@@ -879,15 +1094,18 @@ def _run_latexmk(*, strict: bool, preview: bool) -> None:
     config = load_project_config(cwd / "texproject.toml")
     execution = config.latexmk.execution
     execution.halt_on_error = strict
+    if full:
+        execution.go_mode = 1
     execution.force_mode = not strict
     execution.preview_mode = False
     execution.preview_continuous_mode = preview
-    generate_latexmkrc(config, cwd / ".latexmkrc")
+    rc_path = cwd / ".latexmkrc"
+    generate_latexmkrc(config, rc_path)
     console.print("[dim]Generated .latexmkrc from texproject.toml[/dim]")
 
     env = os.environ.copy()
     if env_dir.exists():
-        env["TEXMFHOME"] = str(env_dir.resolve())
+        env.update(_texenv_vars(env_dir))
         env["max_print_line"] = "100000"  # Avoid line wrapping in logs
         console.print("[dim]Using local .texenv for compilation[/dim]")
     else:
@@ -896,7 +1114,22 @@ def _run_latexmk(*, strict: bool, preview: bool) -> None:
         )
 
     _ensure_latexmk()
-    cmd = ["latexmk", "-g"]
+    if DEBUG:
+        console.print(f"[dim]latexmk: {escape(str(shutil.which('latexmk')))}[/dim]")
+        changed = {k: v for k, v in env.items() if os.environ.get(k) != v}
+        if config.src_dir not in ("", "."):  # set by the generated .latexmkrc
+            src = f"{cwd}/{config.src_dir.strip('/')}//:"
+            for k in ("BIBINPUTS", "TEXINPUTS"):
+                changed[f"{k} (in .latexmkrc)"] = src + os.environ.get(k, "")
+        for k, v in changed.items():
+            console.print(f"[dim]env {escape(k)}={escape(v)}[/dim]")
+    cmd = ["latexmk", *(["-norc", "-r", str(rc_path)] if EXPLICIT_RC else [])]
+    if config.src_dir not in ("", "."):
+        targets = [str(Path(config.src_dir) / f) for f in config.main_files]
+        if missing := [t for t in targets if not (cwd / t).is_file()]:
+            console.print(f"[red]Error:[/red] source file(s) not found: {', '.join(missing)}")
+            raise typer.Exit(code=1)
+        cmd += ["-cd", *targets]
     if not strict:
         cmd.append("-interaction=nonstopmode")
     _debug_cmd(cmd)
@@ -920,14 +1153,155 @@ StrictOpt = Annotated[
 
 
 @app.command()
-def build(strict: StrictOpt = False, debug: DebugOpt = False) -> None:
+def build(
+    strict: StrictOpt = False,
+    full: bool = typer.Option(
+        False, "--full", help="Force a full rebuild (go_mode = 1, like latexmk -g)."
+    ),
+    rm_pdf: bool = typer.Option(
+        False, "--rm-pdf", help="Delete the existing PDF before building."
+    ),
+    debug: DebugOpt = False,
+) -> None:
     """Generate .latexmkrc and compile the project."""
     _intro("texi build")
-    output_file = Path.cwd() / "build" / "main.pdf"
-    if output_file.exists():
-        console.print(f"[dim]Removing existing output file: {output_file}[/dim]")
-        output_file.unlink()
-    _run_latexmk(strict=strict, preview=False)
+    if rm_pdf:
+        config = load_project_config(Path.cwd() / "texproject.toml")
+        output_file = (
+            Path.cwd() / config.latexmk.directories.out_dir / f"{config.jobname}.pdf"
+        )
+        if output_file.exists():
+            console.print(f"[dim]Removing existing output file: {output_file}[/dim]")
+            output_file.unlink()
+    _run_latexmk(strict=strict, preview=False, full=full)
+
+
+def texfmt_config(cfg: TexFmtConfig) -> str:
+    """Render `[tex-fmt]` as a tex-fmt config (flat, hyphenated keys)."""
+    lines = []
+    for key, value in cfg.model_dump().items():
+        if value is None or value == []:
+            continue
+        if isinstance(value, bool):
+            value = str(value).lower()
+        elif isinstance(value, list):
+            value = "[" + ", ".join(json.dumps(v) for v in value) + "]"
+        elif isinstance(value, str):
+            value = json.dumps(value)
+        lines.append(f"{key.replace('_', '-')} = {value}")
+    return "\n".join(lines) + "\n"
+
+
+@app.command()
+def fmt(
+    files: Annotated[
+        list[Path] | None,
+        typer.Argument(help="Files to format (default: every .tex under src_dir)."),
+    ] = None,
+    check: bool = typer.Option(
+        False, "--check", "-c", help="Report files that need formatting; change nothing."
+    ),
+    debug: DebugOpt = False,
+) -> None:
+    """Format .tex files with tex-fmt, using settings from [tex-fmt] in texproject.toml."""
+    _intro("texi fmt")
+    cwd = Path.cwd()
+    config = load_project_config(cwd / "texproject.toml")
+    if not shutil.which("tex-fmt"):
+        console.print("[red]tex-fmt not found.[/red] Try `brew install tex-fmt` or `cargo install tex-fmt`.")
+        raise typer.Exit(code=1)
+    targets = files or sorted((cwd / config.src_dir).rglob("*.tex"))
+    if not targets:
+        console.print("[yellow]No .tex files found.[/yellow]")
+        return
+    # The config goes in over stdin, so no temp file. --config alone is enough: it
+    # takes precedence over any tex-fmt.toml on disk, while --noconfig would
+    # ignore it too.
+    cmd = ["tex-fmt", "--config", "/dev/stdin", *(["--check"] if check else []), *map(str, targets)]
+    _debug_cmd(cmd)
+    run = subprocess.run(cmd, input=texfmt_config(config.tex_fmt), text=True)
+    if run.returncode != 0:
+        console.print("[red]✖ tex-fmt reported problems.[/red]")
+        raise typer.Exit(code=1)
+    outro("[green]✔ Formatting is up to date[/green]" if check else "[green]✔ Formatted[/green]")
+
+
+class ExportFormat(str, Enum):
+    MARKDOWN = "markdown"  # pandoc
+    HTML = "html"  # pandoc
+    TEX4HT = "tex4ht"  # make4ht
+    LATEXML = "latexml"  # latexmlc
+
+
+_EXPORT_HINTS = {
+    "pandoc": "brew install pandoc",
+    "make4ht": "tlmgr install make4ht tex4ht luaxml",
+    "latexmlc": "brew install latexml",
+}
+
+
+@app.command()
+def export(
+    fmt: Annotated[ExportFormat, typer.Argument(help="Output format.")],
+    debug: DebugOpt = False,
+) -> None:
+    """Export to Markdown/HTML via pandoc, or HTML via TeX4ht (make4ht) or LaTeXML."""
+    _intro(f"texi export {fmt.value}")
+    cwd = Path.cwd()
+    config = load_project_config(cwd / "texproject.toml")
+    src = (cwd / config.src_dir).resolve()
+    main = config.main_files[0]
+    if not (src / main).is_file():
+        console.print(f"[red]Error:[/red] source file not found: {src / main}")
+        raise typer.Exit(code=1)
+    out_dir = cwd / "build" / "export" / fmt.value
+    aux_dir = (cwd / config.latexmk.directories.aux_dir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    name = config.jobname
+
+    match fmt:
+        case ExportFormat.MARKDOWN | ExportFormat.HTML:
+            tool = "pandoc"
+            bibs = sorted(src.rglob("*.bib"))
+            cmd = [tool, main, "-f", "latex"]
+            if fmt is ExportFormat.HTML:
+                cmd += ["-t", "html5", "-s", "--math-method=mathjax"]
+                target = out_dir / f"{name}.html"
+            else:
+                cmd += ["-t", "markdown"]
+                target = out_dir / f"{name}.md"
+            if bibs:
+                cmd += ["--citeproc", *(f"--bibliography={b}" for b in bibs)]
+            cmd += ["-o", str(target)]
+        case ExportFormat.TEX4HT:
+            tool = "make4ht"
+            target = out_dir
+            # make4ht mangles absolute -B/-d paths (nests them under the build dir
+            # and leaves output in the source dir), so pass them relative to src.
+            rel = lambda p: os.path.relpath(p, src)  # noqa: E731
+            cmd = [tool, "-u", "-B", rel(aux_dir), "-d", rel(target), main, "mathml"]
+        case ExportFormat.LATEXML:
+            tool = "latexmlc"
+            target = out_dir / f"{name}.html"
+            cmd = [tool, main, f"--dest={target}"]
+
+    if fmt is ExportFormat.TEX4HT:
+        _ensure_make4ht()
+    if not shutil.which(tool):
+        console.print(f"[red]{tool} not found.[/red] Try `{_EXPORT_HINTS[tool]}`.")
+        raise typer.Exit(code=1)
+
+    env = os.environ.copy()
+    env_dir = cwd / ".texenv"
+    if env_dir.exists():
+        env.update(_texenv_vars(env_dir))
+    _debug_cmd(cmd)
+    try:
+        subprocess.run(cmd, cwd=src, env=env, check=True)  # run in src_dir so \input/.bib resolve
+    except subprocess.CalledProcessError as e:
+        console.print(f"\n[red]✖ {tool} failed. Check the logs above.[/red]")
+        raise typer.Exit(code=1) from e
+    outro(f"[green]✔ Exported to {escape(str(target.relative_to(cwd)))}[/green]")
 
 
 @app.command()
@@ -938,10 +1312,12 @@ def preview(strict: StrictOpt = False, debug: DebugOpt = False) -> None:
 
 
 @app.command()
-def tree(project_dir: Path | None = None, fls_filename: str = "main.fls") -> None:
+def tree(project_dir: Path | None = None, fls_filename: str | None = None) -> None:
     if project_dir is None:
         project_dir = Path.cwd()
-    fls_path = project_dir / "build" / "aux" / fls_filename
+    config = load_project_config(project_dir / "texproject.toml")
+    fls_filename = fls_filename or f"{config.jobname}.fls"
+    fls_path = project_dir / config.latexmk.directories.aux_dir / fls_filename
     if not fls_path.exists():
         console.print(
             f"Error: {fls_filename} not found. Is your project built? Did you specify the correct filename (default: main.fls)?"
@@ -1062,20 +1438,80 @@ def formats(
 
 
 @app.command()
+def updmap(
+    user: bool = typer.Option(
+        False, "--user", help="Regenerate user font maps (updmap-user)."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the sudo confirmation."),
+) -> None:
+    """Regenerate font maps (system via sudo by default); run after installing fonts."""
+    if not (user or yes or _confirm("Run `sudo updmap-sys`?", default=True)):
+        raise typer.Exit(1)
+    try:
+        console.print(escape(tools.updmap_user() if user else tools.updmap_sys()))
+    except sh.ErrorReturnCode as e:
+        console.print(f"[red]{escape(str(e))}[/red]")
+        raise typer.Exit(1) from e
+
+
+@app.command()
+def mktexlsr(
+    local: bool = typer.Option(
+        False, "--local", help="Only index .texenv/ (no sudo)."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the sudo confirmation."),
+) -> None:
+    """Rebuild the ls-R filename databases (system via sudo by default)."""
+    if not (local or yes or _confirm("Run `sudo mktexlsr`?", default=True)):
+        raise typer.Exit(1)
+    try:
+        out = (
+            tools.mktexlsr(str(Path.cwd() / ".texenv"))
+            if local
+            else tools.mktexlsr(sudo=True)
+        )
+        console.print(escape(out))
+    except sh.ErrorReturnCode as e:
+        console.print(f"[red]{escape(str(e))}[/red]")
+        raise typer.Exit(1) from e
+
+
+@app.command()
+def luaotfload(
+    force: bool = typer.Option(
+        False, "--force", help="Rebuild the whole database (--update --force)."
+    ),
+) -> None:
+    """Rebuild the LuaTeX font name database (luaotfload-tool --update)."""
+    try:
+        console.print(
+            escape(
+                tools.luaotfload_update("--update", "--force")
+                if force
+                else tools.luaotfload_update()
+            )
+        )
+    except (sh.ErrorReturnCode, sh.CommandNotFound) as e:
+        console.print(f"[red]{escape(str(e))}[/red]")
+        raise typer.Exit(1) from e
+
+
+@app.command()
 def update(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the sudo confirmation."),
 ) -> None:
-    """Update TeX Live (sudo tlmgr update --self --all), then rebuild formats."""
+    """Update TeX Live (sudo tlmgr update --self --all), then rebuild formats and font maps."""
     if not (
         yes
         or _confirm(
-            "Run `sudo tlmgr update --self --all` and rebuild formats?", default=True
+            "Run `sudo tlmgr update --self --all` and rebuild formats and font maps?", default=True
         )
     ):
         raise typer.Exit(1)
     try:
         console.print(escape(tools.tlmgr_update()))
         console.print(escape(tools.fmtutil_sys()))
+        console.print(escape(tools.updmap_sys()))
     except sh.ErrorReturnCode as e:
         console.print(f"[red]{escape(str(e))}[/red]")
         raise typer.Exit(1) from e

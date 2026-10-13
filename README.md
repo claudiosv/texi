@@ -4,74 +4,194 @@ An isolated workspace manager for LaTeX projects.
 
 `texi` wraps `tlmgr` and `latexmk` to give each LaTeX project its own local TeX Live tree (`.texenv/`), so package versions are pinned per-project and system-wide TeX Live is never polluted.
 
-## Features
+## Commands
 
-- **`texi init`** — creates a `texproject.toml`. If `.tex` files exist in the current directory tree, scans them for `\usepackage`/`\RequirePackage` and seeds `dependencies` with the resolved `tlmgr` package names.
-- **`texi sync`** — reads `texproject.toml`, initialises a local `tlmgr` user-tree in `.texenv/`, and installs declared dependencies into it.
-- **`texi build`** — compiles the project with `latexmk`, pointing it at the local `.texenv/` tree via `TEXMFHOME`.
+| command | what it does |
+|---|---|
+| `texi init` | Creates `texproject.toml` (`[project]` with `name` = directory name, `src_dir = "src"`), seeding `dependencies` by scanning `.tex` files for `\usepackage`/`\RequirePackage`. |
+| `texi add <pkg>...` | Adds packages to `dependencies` and installs them. A name that isn't a TeX Live package (e.g. `binhex`) is resolved to the package that ships it (`kastrup`), asking you to confirm or choose. `--sync` runs a full sync afterwards. |
+| `texi sync` | Installs all `dependencies` into `.texenv/`, then updates them (`--no-update` to skip). |
+| `texi build` | Generates `.latexmkrc` from the config and runs `latexmk`. `--strict` stops at the first error, `--full` forces a full rebuild (`go_mode = 1`), `--rm-pdf` deletes the old PDF first. |
+| `texi preview` | Like `build`, but opens the viewer and rebuilds on every change (`latexmk -pvc`). |
+| `texi export <markdown\|html\|tex4ht\|latexml>` | Converts to `build/export/<format>/`: Markdown or HTML via pandoc (with citeproc and MathJax), HTML via TeX4ht (`make4ht`, needs `luaxml`) or LaTeXML (`latexmlc`). |
+| `texi fmt [files]` | Formats `.tex` files under `src_dir` with `tex-fmt`, using the settings in `[tex-fmt]`. `--check` only reports. |
+| `texi scan` | Lists the packages your sources use and their `tlmgr` dependencies. |
+| `texi tree` | Shows which files the last build actually read. |
+| `texi doctor` | Checks the TeX install and flags stale user-level formats. |
+| `texi formats` / `texi updmap` / `texi mktexlsr` / `texi luaotfload` / `texi update` | Rebuild formats, font maps, the `ls-R` filename databases (`--local` for `.texenv/` only) and the LuaTeX font database (`--force` for a full rebuild); update TeX Live. |
+
+All commands accept `--debug` where it makes sense.
 
 ## Installation
 
 ```bash
-uv tool install texi
+uv tool install texi-cli
 ```
 
-Or, inside a project with `uv`:
+## Quick start
 
 ```bash
-uv add texi
+texi init      # create texproject.toml
+texi sync      # install dependencies into .texenv/
+texi build     # compile
 ```
 
-## Usage
+Default layout (`src_dir = "src"`):
 
-1. Add a `texproject.toml` to your LaTeX project root, either by hand or by running `texi init` (which scans any existing `.tex` files for dependencies):
-
-```bash
-texi init
 ```
+texproject.toml
+.latexmkrc          # generated, keep at the project root
+.texenv/            # local TeX tree
+build/              # PDF and aux files
+src/main.tex        # latexmk -cd src/main.tex
+src/references.bib
+```
+
+`texi build` regenerates `.latexmkrc` on every run, so edit `texproject.toml`, not the rc file.
+
+## `texproject.toml` reference
+
+Every key is optional. Keys outside the tables below are rejected.
 
 ```toml
-[latexmk]
+[project]
+name = "my-paper"
+src_dir = "src"
+dependencies = ["acmart", "biblatex", "geometry"]
 
 [latexmk.engines]
-pdf_mode = "pdflatex"
+pdf_mode = "lualatex"
 
 [latexmk.directories]
-out_dir  = "build/"
-aux_dir  = "build/aux/"
+out_dir = "build"
+aux_dir = "build"
 
-dependencies = ["acmart", "biblatex", "geometry"]
+[latexmk.programs]
+lualatex = "lualatex -interaction=nonstopmode -synctex=1 %O %S"
+
+[latexmk.execution]
+bibtex_use = "always"
+
+[latexmk.files]
+jobname = "my_paper"
 ```
 
-To shrink pdflatex's PDF output, set `optimize_pdf = true` under `[latexmk.execution]`. This injects `\pdfminorversion=5 \pdfcompresslevel=9 \pdfobjcompresslevel=3` before the document is read:
+### `[project]`
+
+| key | default | description |
+|---|---|---|
+| `name` | none | Project name. Used as the latexmk `$jobname` (so the PDF is `<name>.pdf`) unless `latexmk.files.jobname` is set. `texi init` sets it to the directory name. |
+| `src_dir` | `"src"` | Directory holding the `.tex` sources. texi runs `latexmk -cd <src_dir>/<main file>`. Use `"."` for sources in the project root (then latexmk picks up `*.tex` itself). |
+| `dependencies` | `[]` | `tlmgr` package names installed into `.texenv/` by `texi sync` / `texi add`. |
+
+When `src_dir` is not `"."`, the generated `.latexmkrc` stays at the project root and:
+
+- anchors `out_dir`/`aux_dir` at the project root (otherwise `-cd` would put them inside `src/`),
+- prepends `<root>/<src_dir>//` to `BIBINPUTS` and `TEXINPUTS`, so biber/bibtex running from the aux dir still find your `.bib` files.
+
+The main file is `latexmk.files.default_files[0]` (relative to `src_dir`), else `main.tex`.
+
+### `[latexmk.engines]`
+
+| key | default | description |
+|---|---|---|
+| `pdf_mode` | `"pdflatex"` | How the PDF is produced (latexmk `$pdf_mode`), see below. |
+| `dvi_mode` | `false` | Also produce a DVI (`$dvi_mode`). |
+| `postscript_mode` | `false` | Also produce PostScript (`$postscript_mode`). |
+
+`pdf_mode` values:
+
+| value | `$pdf_mode` | pipeline |
+|---|---|---|
+| `"off"` | 0 | no PDF |
+| `"pdflatex"` | 1 | pdflatex straight to PDF |
+| `"ps2pdf"` | 2 | latex → dvips → ps2pdf (for PostScript-dependent packages like pstricks) |
+| `"dvi2pdf"` | 3 | latex → dvipdf |
+| `"lualatex"` | 4 | lualatex straight to PDF; best Unicode and OpenType font support |
+| `"xelatex"` | 5 | xelatex; Unicode and system fonts |
+
+### `[latexmk.directories]`
+
+| key | default | description |
+|---|---|---|
+| `out_dir` | `"build/"` | Where the final PDF goes (`$out_dir`). |
+| `aux_dir` | `"build/aux/"` | Where `.aux`, `.log`, `.fls` etc. go (`$aux_dir`). Set equal to `out_dir` to keep one folder. |
+
+A trailing `/` is added if missing. Relative paths are relative to the project root.
+
+### `[latexmk.programs]`
+
+Override the command latexmk runs for a tool. Use `%O` for latexmk's options and `%S` for the source file. All default to latexmk's own commands (unset).
+
+`pdflatex`, `lualatex`, `xelatex`, `latex`, `bibtex`, `biber`, `makeindex`, `makeglossaries`, `dvips`, `ps2pdf`, `dvipdf`, `gs`
+
+and the quiet-mode switches `pdflatex_silent_switch`, `lualatex_silent_switch`, `xelatex_silent_switch`, `latex_silent_switch`, `bibtex_silent_switch`, `biber_silent_switch`.
 
 ```toml
-[latexmk.execution]
-optimize_pdf = true
+[latexmk.programs]
+pdflatex = "pdflatex -shell-escape %O %S"
 ```
 
-2. Install dependencies into the local tree:
+### `[latexmk.execution]`
 
-```bash
-texi sync
-```
+| key | default | description |
+|---|---|---|
+| `halt_on_error` | `true` | Stop at the first error. `texi build`/`preview` override it with `--strict`. |
+| `force_mode` | `false` | Keep going past errors (`-f`). Overridden by `--strict` (on unless strict). |
+| `go_mode` | `0` | `0` rebuild what changed; `1` force a full rebuild (`-g`); `2` clean first (`-gg`). `texi build --full` sets `1`. |
+| `bibtex_use` | `"always"` | `"never"` (0), `"bib_exists"` (1), `"even_without_bib"` (1.5), `"always"` (2: run bibtex/biber as needed and delete `.bbl` on clean). |
+| `max_repeat` | `5` | Maximum latex reruns (1–20). |
+| `preview_continuous_mode` | `false` | `-pvc`. Set by `texi preview`. |
+| `preview_mode` | `false` | `-p`, one-shot preview. Always off for texi commands. |
+| `sleep_time` | `2` | Seconds between file checks in continuous mode. |
+| `recorder` | `true` | Pass `-recorder` so the `.fls` file list is written (needed by `texi tree`). |
+| `warnings_as_errors` | `false` | Treat warnings as errors. |
+| `optimize_pdf` | `false` | pdflatex only: inject `\pdfminorversion=5 \pdfcompresslevel=9 \pdfobjcompresslevel=3` to shrink the PDF. |
 
-3. Build the project:
+### `[latexmk.files]`
 
-```bash
-texi build
-```
+| key | default | description |
+|---|---|---|
+| `default_files` | `[]` | Main `.tex` files, relative to `src_dir`. Empty means `main.tex`. |
+| `jobname` | none | Output name (`$jobname`). Falls back to `project.name`; if neither is set, no `$jobname` is written and latexmk uses the main file's name. |
+| `clean_ext` | see below | Extra extensions removed by `latexmk -c`. |
+| `clean_full_ext` | `[]` | Extra extensions removed by `latexmk -C`. |
+| `generated_exts` | `[]` | Extensions latexmk treats as generated (affects rerun detection). |
+
+`clean_ext` default: `synctex.gz`, `synctex.gz(busy)`, `run.xml`, `tex.bak`, `bbl`, `bcf`, `fdb_latexmk`, `fls`, `lof`, `lot`, `out`, `toc`, `nav`, `snm`, `vrb`. Setting it replaces the list.
+
+### `[latexmk.viewers]`
+
+All default to unset (latexmk's own defaults).
+
+| key | description |
+|---|---|
+| `pdf_previewer`, `dvi_previewer`, `ps_previewer` | Viewer command for each output type. |
+| `pdf_update_method`, `dvi_update_method`, `ps_update_method` | How the viewer is told about changes: `0` manual, `1` signal, `2`, `3` run a command (see latexmk's `$pdf_update_method`). |
+| `pdf_update_signal`, `dvi_update_signal`, `ps_update_signal` | Signal number used with method `1` (1–64). |
+
+### `[tex-fmt]`
+
+Settings for `texi fmt`, rendered as a tex-fmt config and piped to `tex-fmt --config /dev/stdin` on every run (no temp file). It overrides any `tex-fmt.toml` on disk.
+
+| key | default | description |
+|---|---|---|
+| `wrap` | `true` | Wrap long lines. |
+| `wraplen` | `80` | Line length for wrapping. |
+| `wrapmin` | tex-fmt's own (`wraplen` − 10) | Minimum line length before wrapping. |
+| `tabsize` | `2` | Indent width. |
+| `tabchar` | `"space"` | `"space"` or `"tab"`. |
+| `lists` | `[]` | Extra list environments (added to tex-fmt's built-ins). |
+| `verbatims` | `[]` | Extra environments left untouched (added to the built-ins). |
+| `no_indent_envs` | `[]` | Extra environments whose contents aren't indented. |
+| `wrap_chars` | `[]` | Extra characters lines may be broken after. |
+| `format_tables` | `false` | Format tables. |
 
 ## Development
 
 ```bash
 uv sync
 uv run texi --help
-```
-
-Linting and type-checking:
-
-```bash
 uv run ruff check .
 uv run ruff format .
 uv run ty check .

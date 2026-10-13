@@ -37,6 +37,27 @@ def fmtutil_user(*args: str) -> str:
     return str(_cmd("fmtutil-user")(*(args or ("--all",))))
 
 
+def updmap_sys(*args: str) -> str:
+    """Regenerate system font maps. Needs root, so runs via sudo."""
+    return str(sh.sudo(_cmd("updmap-sys"), *args))
+
+
+def updmap_user(*args: str) -> str:
+    """Regenerate user-level font maps."""
+    return str(_cmd("updmap-user")(*args))
+
+
+def mktexlsr(*dirs: str, sudo: bool = False) -> str:
+    """Rebuild ls-R filename databases (all texmf trees by default)."""
+    cmd = _cmd("mktexlsr")
+    return str(sh.sudo(cmd, *dirs) if sudo else cmd(*dirs))
+
+
+def luaotfload_update(*args: str) -> str:
+    """Rebuild the LuaTeX font name database (`--update` by default)."""
+    return str(_cmd("luaotfload-tool")(*(args or ("--update",))))
+
+
 def tlmgr_update(*args: str) -> str:
     """`sudo tlmgr update --self --all` by default."""
     return str(sh.sudo(_cmd("tlmgr"), "update", *(args or ("--self", "--all"))))

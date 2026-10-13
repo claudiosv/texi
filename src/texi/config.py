@@ -1,9 +1,21 @@
 from enum import Enum
+from typing import Literal
+from pathlib import Path
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class PdfMode(str, Enum):
+    """latexmk's $pdf_mode: how the PDF is produced.
+
+    off      (0) no PDF
+    pdflatex (1) pdflatex straight to PDF
+    ps2pdf   (2) latex -> dvips -> ps2pdf (PostScript tooling, e.g. pstricks)
+    dvi2pdf  (3) latex -> dvipdf(m)x
+    lualatex (4) lualatex straight to PDF (best Unicode/OpenType font support)
+    xelatex  (5) xelatex via xdvipdfmx (Unicode/OpenType, system fonts)
+    """
+
     OFF = "off"
     PDFLATEX = "pdflatex"
     PS2PDF = "ps2pdf"
@@ -74,6 +86,8 @@ class LatexmkPrograms(BaseModel):
 
 class LatexmkExecution(BaseModel):
     halt_on_error: bool = True
+    # 0 = rebuild only what changed; 1 = force a full rebuild (-g); 2 = clean first (-gg)
+    go_mode: int = Field(default=0, ge=0, le=2)
     # -f: keep processing past errors (rc variable $force_mode)
     force_mode: bool = False
     bibtex_use: BibtexUse = BibtexUse.ALWAYS
@@ -91,11 +105,32 @@ class LatexmkExecution(BaseModel):
     optimize_pdf: bool = False
 
 
+DEFAULT_CLEAN_EXT = [
+    "synctex.gz",
+    "synctex.gz(busy)",
+    "run.xml",
+    "tex.bak",
+    "bbl",
+    "bcf",
+    "fdb_latexmk",
+    "fls",
+    "lof",
+    "lot",
+    "out",
+    "toc",
+    "nav",
+    "snm",
+    "vrb",
+]
+
+
 class LatexmkFiles(BaseModel):
     # Top-level .tex files to compile; latexmk's @default_files
     default_files: list[str] = Field(default_factory=list)
+    # Output name (latexmk's $jobname); defaults to `name`, else the main file's name
+    jobname: str | None = None
     # Extra extensions removed by `latexmk -c`
-    clean_ext: list[str] = Field(default_factory=list)
+    clean_ext: list[str] = Field(default_factory=lambda: list(DEFAULT_CLEAN_EXT))
     # Extra extensions removed by `latexmk -C` (full clean)
     clean_full_ext: list[str] = Field(default_factory=list)
     # Extensions latexmk treats as generated (triggers rerun detection)
@@ -125,6 +160,61 @@ class LatexmkConfig(BaseModel):
     viewers: LatexmkViewers = Field(default_factory=LatexmkViewers)
 
 
-class TexProjectConfig(BaseModel):
+class ProjectConfig(BaseModel):
+    # Project name; used as the latexmk jobname unless latexmk.files.jobname is set
+    name: str | None = None
+    # Directory holding the .tex sources; "." = project root. latexmk runs with -cd.
+    src_dir: str = "src"
     dependencies: list[str] = Field(default_factory=list)
+
+
+class TexFmtConfig(BaseModel):
+    """Settings for `texi fmt`, written to a generated tex-fmt config file."""
+
+    wrap: bool = True
+    wraplen: int = Field(default=80, ge=1)
+    wrapmin: int | None = Field(default=None, ge=1)
+    tabsize: int = Field(default=2, ge=1)
+    tabchar: Literal["space", "tab"] = "space"
+    # Extend tex-fmt's built-in lists (they are added to, not replaced)
+    lists: list[str] = Field(default_factory=list)
+    verbatims: list[str] = Field(default_factory=list)
+    no_indent_envs: list[str] = Field(default_factory=list)
+    wrap_chars: list[str] = Field(default_factory=list)
+    format_tables: bool = False
+
+
+class TexProjectConfig(BaseModel):
+    # Reject stray top-level keys, e.g. a pre-[project] `dependencies = [...]`
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    project: ProjectConfig = Field(default_factory=ProjectConfig)
     latexmk: LatexmkConfig = Field(default_factory=LatexmkConfig)
+    tex_fmt: TexFmtConfig = Field(default_factory=TexFmtConfig, alias="tex-fmt")
+
+    @property
+    def name(self) -> str | None:
+        return self.project.name
+
+    @property
+    def src_dir(self) -> str:
+        return self.project.src_dir
+
+    @property
+    def dependencies(self) -> list[str]:
+        return self.project.dependencies
+
+    @property
+    def main_files(self) -> list[str]:
+        """Main .tex files relative to src_dir (default_files, else main.tex)."""
+        return self.latexmk.files.default_files or ["main.tex"]
+
+    @property
+    def set_jobname(self) -> str | None:
+        """Jobname to pass to latexmk; None leaves latexmk's default."""
+        return self.latexmk.files.jobname or self.name
+
+    @property
+    def jobname(self) -> str:
+        """Name of the output files, as latexmk will produce them."""
+        return self.set_jobname or Path(self.main_files[0]).stem
