@@ -1,0 +1,32 @@
+src/texi/config.py
+  s_d0ca1f1270e169::t_4e6f06b541df1b 115-116
+  s_d0ca1f1270e169::t_4829e4345dd982 200-201
+src/texi/cli.py
+  s_d0ca1f1270e169::t_1706f0b91a63c5 1357,1364,1411-1412,1423-1424,1430-1434,1635-1647
+  s_d0ca1f1270e169::t_ff6da855bb318f 258
+  s_d0ca1f1270e169::t_4829e4345dd982 271
+  s_d0ca1f1270e169::t_4e6f06b541df1b 326,1358-1363,1374,1413-1415,1457-1459,1476
+  s_d0ca1f1270e169::t_94ed6f13713565 1380-1381,1387-1388,1418-1419
+  s_d0ca1f1270e169::t_69b30622194489 1910
+  s_d0ca1f1270e169::t_aef2bf40f97cb2 1648-1649
+README.md
+  s_d0ca1f1270e169::t_aaceb1ecb299c3 15
+  s_d0ca1f1270e169::t_94ed6f13713565 14,158
+  s_d0ca1f1270e169::t_4829e4345dd982 119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c392fb67f51f5000b8783c77989afa5a65c5dde7",
+  "prompts": {},
+  "sessions": {
+    "s_d0ca1f1270e169": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4bbcdc79-f98a-4f4d-8f9d-4d45d80e0b82",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Claudio Spiess <claudiosv@users.noreply.github.com>"
+    }
+  }
+}
