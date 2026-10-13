@@ -31,11 +31,23 @@ class BibtexUse(str, Enum):
     ALWAYS = "always"
 
 
-class PdfUpdateMethod(int, Enum):
-    MANUAL = 0
-    SIGNAL = 1
-    POPEN = 2
-    SYSTEM = 3
+class ViewerUpdate(str, Enum):
+    """How latexmk gets a PDF/DVI/PS viewer to show a rebuilt file."""
+
+    AUTO = "auto"  # the viewer watches the file itself
+    MANUAL = "manual"  # you refresh the viewer yourself
+    SIGNAL = "signal"  # latexmk sends the viewer a signal
+    NONE = "none"  # viewer locks the file, so it can't be updated
+    COMMAND = "command"  # latexmk runs the *_update_command
+
+
+class GoMode(str, Enum):
+    """How much latexmk redoes (latexmk's $go_mode)."""
+
+    REBUILD = "rebuild"  # only what changed
+    FULL_REBUILD = "full-rebuild"  # everything, regardless of timestamps (-g)
+    CLEAN = "clean"  # delete generated files first, then build (-gg)
+    FORCE_MAIN = "force-main"  # rerun just the main compile, then continue (-gt)
 
 
 class LatexmkEngines(BaseModel):
@@ -86,8 +98,7 @@ class LatexmkPrograms(BaseModel):
 
 class LatexmkExecution(BaseModel):
     halt_on_error: bool = True
-    # 0 = rebuild only what changed; 1 = force a full rebuild (-g); 2 = clean first (-gg)
-    go_mode: int = Field(default=0, ge=0, le=2)
+    go_mode: GoMode = GoMode.REBUILD
     # -f: keep processing past errors (rc variable $force_mode)
     force_mode: bool = False
     bibtex_use: BibtexUse = BibtexUse.ALWAYS
@@ -142,26 +153,34 @@ class LatexmkViewers(BaseModel):
     dvi_previewer: str | None = None
     ps_previewer: str | None = None
     # How the viewer is signalled when the output file changes
-    pdf_update_method: PdfUpdateMethod | None = None
-    dvi_update_method: PdfUpdateMethod | None = None
-    ps_update_method: PdfUpdateMethod | None = None
-    # Signal number used when update_method == SIGNAL (default: SIGHUP = 1)
+    pdf_update_method: ViewerUpdate | None = None
+    dvi_update_method: ViewerUpdate | None = None
+    ps_update_method: ViewerUpdate | None = None
+    # Command run when update_method == "command"
+    pdf_update_command: str | None = None
+    dvi_update_command: str | None = None
+    ps_update_command: str | None = None
+    # Signal number used when update_method == "signal" (default: SIGHUP = 1)
     pdf_update_signal: int | None = Field(default=None, ge=1, le=64)
     dvi_update_signal: int | None = Field(default=None, ge=1, le=64)
     ps_update_signal: int | None = Field(default=None, ge=1, le=64)
 
 
-class LatexmkConfig(BaseModel):
-    engines: LatexmkEngines = Field(default_factory=LatexmkEngines)
-    directories: LatexmkDirectories = Field(default_factory=LatexmkDirectories)
-    programs: LatexmkPrograms = Field(default_factory=LatexmkPrograms)
-    execution: LatexmkExecution = Field(default_factory=LatexmkExecution)
-    files: LatexmkFiles = Field(default_factory=LatexmkFiles)
-    viewers: LatexmkViewers = Field(default_factory=LatexmkViewers)
+class BuildConfig(
+    LatexmkEngines,
+    LatexmkDirectories,
+    LatexmkPrograms,
+    LatexmkExecution,
+    LatexmkFiles,
+    LatexmkViewers,
+):
+    """Everything under `[build]`: one flat table of latexmk settings."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class ProjectConfig(BaseModel):
-    # Project name; used as the latexmk jobname unless latexmk.files.jobname is set
+    # Project name; used as the latexmk jobname unless build.jobname is set
     name: str | None = None
     # Directory holding the .tex sources; "." = project root. latexmk runs with -cd.
     src_dir: str = "src"
@@ -189,7 +208,7 @@ class TexProjectConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     project: ProjectConfig = Field(default_factory=ProjectConfig)
-    latexmk: LatexmkConfig = Field(default_factory=LatexmkConfig)
+    build: BuildConfig = Field(default_factory=BuildConfig)
     tex_fmt: TexFmtConfig = Field(default_factory=TexFmtConfig, alias="tex-fmt")
 
     @property
@@ -207,12 +226,12 @@ class TexProjectConfig(BaseModel):
     @property
     def main_files(self) -> list[str]:
         """Main .tex files relative to src_dir (default_files, else main.tex)."""
-        return self.latexmk.files.default_files or ["main.tex"]
+        return self.build.default_files or ["main.tex"]
 
     @property
     def set_jobname(self) -> str | None:
         """Jobname to pass to latexmk; None leaves latexmk's default."""
-        return self.latexmk.files.jobname or self.name
+        return self.build.jobname or self.name
 
     @property
     def jobname(self) -> str:

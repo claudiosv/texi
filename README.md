@@ -11,7 +11,7 @@ An isolated workspace manager for LaTeX projects.
 | `texi init` | Creates `texproject.toml` (`[project]` with `name` = directory name, `src_dir = "src"`), seeding `dependencies` by scanning `.tex` files for `\usepackage`/`\RequirePackage`. |
 | `texi add <pkg>...` | Adds packages to `dependencies` and installs them. A name that isn't a TeX Live package (e.g. `binhex`) is resolved to the package that ships it (`kastrup`), asking you to confirm or choose. `--sync` runs a full sync afterwards. |
 | `texi sync` | Installs all `dependencies` into `.texenv/`, then updates them (`--no-update` to skip). |
-| `texi build` | Generates `.latexmkrc` from the config and runs `latexmk`. `--strict` stops at the first error, `--full` forces a full rebuild (`go_mode = 1`), `--rm-pdf` deletes the old PDF first. |
+| `texi build` | Generates `.latexmkrc` from the config and runs `latexmk`. `--strict` stops at the first error, `--full` forces a full rebuild (`go_mode = "full-rebuild"`), `--rm-pdf` deletes the old PDF first. |
 | `texi preview` | Like `build`, but opens the viewer and rebuilds on every change (`latexmk -pvc`). |
 | `texi export <markdown\|html\|tex4ht\|latexml>` | Converts to `build/export/<format>/`: Markdown or HTML via pandoc (with citeproc and MathJax), HTML via TeX4ht (`make4ht`, needs `luaxml`) or LaTeXML (`latexmlc`). |
 | `texi fmt [files]` | Formats `.tex` files under `src_dir` with `tex-fmt`, using the settings in `[tex-fmt]`. `--check` only reports. |
@@ -59,28 +59,20 @@ name = "my-paper"
 src_dir = "src"
 dependencies = ["acmart", "biblatex", "geometry"]
 
-[latexmk.engines]
+[build]
+jobname = "my_paper"
 pdf_mode = "lualatex"
-
-[latexmk.directories]
 out_dir = "build"
 aux_dir = "build"
-
-[latexmk.programs]
 lualatex = "lualatex -interaction=nonstopmode -synctex=1 %O %S"
-
-[latexmk.execution]
 bibtex_use = "always"
-
-[latexmk.files]
-jobname = "my_paper"
 ```
 
 ### `[project]`
 
 | key | default | description |
 |---|---|---|
-| `name` | none | Project name. Used as the latexmk `$jobname` (so the PDF is `<name>.pdf`) unless `latexmk.files.jobname` is set. `texi init` sets it to the directory name. |
+| `name` | none | Project name. Used as the latexmk `$jobname` (so the PDF is `<name>.pdf`) unless `build.jobname` is set. `texi init` sets it to the directory name. |
 | `src_dir` | `"src"` | Directory holding the `.tex` sources. texi runs `latexmk -cd <src_dir>/<main file>`. Use `"."` for sources in the project root (then latexmk picks up `*.tex` itself). |
 | `dependencies` | `[]` | `tlmgr` package names installed into `.texenv/` by `texi sync` / `texi add`. |
 
@@ -89,9 +81,13 @@ When `src_dir` is not `"."`, the generated `.latexmkrc` stays at the project roo
 - anchors `out_dir`/`aux_dir` at the project root (otherwise `-cd` would put them inside `src/`),
 - prepends `<root>/<src_dir>//` to `BIBINPUTS` and `TEXINPUTS`, so biber/bibtex running from the aux dir still find your `.bib` files.
 
-The main file is `latexmk.files.default_files[0]` (relative to `src_dir`), else `main.tex`.
+The main file is `build.default_files[0]` (relative to `src_dir`), else `main.tex`.
 
-### `[latexmk.engines]`
+### `[build]`
+
+One flat table. The keys are grouped below by what they control.
+
+#### Engine
 
 | key | default | description |
 |---|---|---|
@@ -110,7 +106,7 @@ The main file is `latexmk.files.default_files[0]` (relative to `src_dir`), else 
 | `"lualatex"` | 4 | lualatex straight to PDF; best Unicode and OpenType font support |
 | `"xelatex"` | 5 | xelatex; Unicode and system fonts |
 
-### `[latexmk.directories]`
+#### Directories
 
 | key | default | description |
 |---|---|---|
@@ -119,7 +115,7 @@ The main file is `latexmk.files.default_files[0]` (relative to `src_dir`), else 
 
 A trailing `/` is added if missing. Relative paths are relative to the project root.
 
-### `[latexmk.programs]`
+#### Programs
 
 Override the command latexmk runs for a tool. Use `%O` for latexmk's options and `%S` for the source file. All default to latexmk's own commands (unset).
 
@@ -128,17 +124,17 @@ Override the command latexmk runs for a tool. Use `%O` for latexmk's options and
 and the quiet-mode switches `pdflatex_silent_switch`, `lualatex_silent_switch`, `xelatex_silent_switch`, `latex_silent_switch`, `bibtex_silent_switch`, `biber_silent_switch`.
 
 ```toml
-[latexmk.programs]
+[build]
 pdflatex = "pdflatex -shell-escape %O %S"
 ```
 
-### `[latexmk.execution]`
+#### Execution
 
 | key | default | description |
 |---|---|---|
 | `halt_on_error` | `true` | Stop at the first error. `texi build`/`preview` override it with `--strict`. |
 | `force_mode` | `false` | Keep going past errors (`-f`). Overridden by `--strict` (on unless strict). |
-| `go_mode` | `0` | `0` rebuild what changed; `1` force a full rebuild (`-g`); `2` clean first (`-gg`). `texi build --full` sets `1`. |
+| `go_mode` | `"rebuild"` | `"rebuild"` redo only what changed; `"full-rebuild"` redo everything (`-g`); `"clean"` delete generated files first (`-gg`); `"force-main"` rerun only the main compile, then continue (`-gt`). `texi build --full` sets `"full-rebuild"`. |
 | `bibtex_use` | `"always"` | `"never"` (0), `"bib_exists"` (1), `"even_without_bib"` (1.5), `"always"` (2: run bibtex/biber as needed and delete `.bbl` on clean). |
 | `max_repeat` | `5` | Maximum latex reruns (1–20). |
 | `preview_continuous_mode` | `false` | `-pvc`. Set by `texi preview`. |
@@ -148,7 +144,7 @@ pdflatex = "pdflatex -shell-escape %O %S"
 | `warnings_as_errors` | `false` | Treat warnings as errors. |
 | `optimize_pdf` | `false` | pdflatex only: inject `\pdfminorversion=5 \pdfcompresslevel=9 \pdfobjcompresslevel=3` to shrink the PDF. |
 
-### `[latexmk.files]`
+#### Files
 
 | key | default | description |
 |---|---|---|
@@ -160,15 +156,16 @@ pdflatex = "pdflatex -shell-escape %O %S"
 
 `clean_ext` default: `synctex.gz`, `synctex.gz(busy)`, `run.xml`, `tex.bak`, `bbl`, `bcf`, `fdb_latexmk`, `fls`, `lof`, `lot`, `out`, `toc`, `nav`, `snm`, `vrb`. Setting it replaces the list.
 
-### `[latexmk.viewers]`
+#### Viewers
 
 All default to unset (latexmk's own defaults).
 
 | key | description |
 |---|---|
 | `pdf_previewer`, `dvi_previewer`, `ps_previewer` | Viewer command for each output type. |
-| `pdf_update_method`, `dvi_update_method`, `ps_update_method` | How the viewer is told about changes: `0` manual, `1` signal, `2`, `3` run a command (see latexmk's `$pdf_update_method`). |
-| `pdf_update_signal`, `dvi_update_signal`, `ps_update_signal` | Signal number used with method `1` (1–64). |
+| `pdf_update_method`, `dvi_update_method`, `ps_update_method` | How the viewer shows a rebuilt file: `"auto"` (viewer watches the file), `"manual"` (you refresh it), `"signal"` (latexmk signals it), `"none"` (viewer locks the file, can't update), `"command"` (latexmk runs the `*_update_command`). |
+| `pdf_update_command`, `dvi_update_command`, `ps_update_command` | Command to run when the method is `"command"`. |
+| `pdf_update_signal`, `dvi_update_signal`, `ps_update_signal` | Signal number used with `"signal"` (1–64). |
 
 ### `[tex-fmt]`
 

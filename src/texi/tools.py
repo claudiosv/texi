@@ -27,9 +27,14 @@ def engine_version(engine: str = "pdflatex") -> str:
     return str(_cmd(engine)("--version")).splitlines()[0]
 
 
-def fmtutil_sys(*args: str) -> str:
-    """Rebuild system formats (`--all` by default). Needs root, so runs via sudo."""
-    return str(sh.sudo(_cmd("fmtutil-sys"), *(args or ("--all",))))
+def _run_sys(name: str, args: tuple[str, ...], sudo: bool) -> str:
+    cmd = _cmd(name)
+    return str(sh.sudo(cmd, *args) if sudo else cmd(*args))
+
+
+def fmtutil_sys(*args: str, sudo: bool = True) -> str:
+    """Rebuild system formats (`--all` by default); via sudo unless the tree is writable."""
+    return _run_sys("fmtutil-sys", args or ("--all",), sudo)
 
 
 def fmtutil_user(*args: str) -> str:
@@ -37,9 +42,9 @@ def fmtutil_user(*args: str) -> str:
     return str(_cmd("fmtutil-user")(*(args or ("--all",))))
 
 
-def updmap_sys(*args: str) -> str:
-    """Regenerate system font maps. Needs root, so runs via sudo."""
-    return str(sh.sudo(_cmd("updmap-sys"), *args))
+def updmap_sys(*args: str, sudo: bool = True) -> str:
+    """Regenerate system font maps; via sudo unless the tree is writable."""
+    return _run_sys("updmap-sys", args, sudo)
 
 
 def updmap_user(*args: str) -> str:
@@ -49,8 +54,7 @@ def updmap_user(*args: str) -> str:
 
 def mktexlsr(*dirs: str, sudo: bool = False) -> str:
     """Rebuild ls-R filename databases (all texmf trees by default)."""
-    cmd = _cmd("mktexlsr")
-    return str(sh.sudo(cmd, *dirs) if sudo else cmd(*dirs))
+    return _run_sys("mktexlsr", dirs, sudo)
 
 
 def luaotfload_update(*args: str) -> str:
@@ -58,9 +62,9 @@ def luaotfload_update(*args: str) -> str:
     return str(_cmd("luaotfload-tool")(*(args or ("--update",))))
 
 
-def tlmgr_update(*args: str) -> str:
-    """`sudo tlmgr update --self --all` by default."""
-    return str(sh.sudo(_cmd("tlmgr"), "update", *(args or ("--self", "--all"))))
+def tlmgr_update(*args: str, sudo: bool = True) -> str:
+    """`tlmgr update --self --all` by default; via sudo unless the tree is writable."""
+    return _run_sys("tlmgr", ("update", *(args or ("--self", "--all"))), sudo)
 
 
 def format_paths(engine: str = "pdflatex") -> list[str]:
