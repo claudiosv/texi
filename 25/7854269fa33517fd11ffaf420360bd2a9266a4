@@ -1,0 +1,27 @@
+README.md
+  s_d0ca1f1270e169::t_cfec1fd42d1845 13,76-78,87,112-124,203-205
+  s_d0ca1f1270e169::t_0ebf187012ae3b 206
+src/texi/cli.py
+  s_d0ca1f1270e169::t_1933c702a4f5d7 866,895-897,1320,1336-1340
+  s_d0ca1f1270e169::t_ebabfb56d7b4af 148-152,357,993,1013,1056,1132,1174,1194,1207,1220
+  s_d0ca1f1270e169::t_37ed9d9525f6f9 31-37,153-158,251-284,305-317,322-324,342,344-349,827-865,867-894,898-903,1103,1107-1109,1224
+  s_d0ca1f1270e169::t_cfec1fd42d1845 813
+src/texi/config.py
+  s_d0ca1f1270e169::t_ebabfb56d7b4af 181-190,195-200,244-245
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "257854269fa33517fd11ffaf420360bd2a9266a4",
+  "prompts": {},
+  "sessions": {
+    "s_d0ca1f1270e169": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4bbcdc79-f98a-4f4d-8f9d-4d45d80e0b82",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Claudio Spiess <claudiosv@users.noreply.github.com>"
+    }
+  }
+}
