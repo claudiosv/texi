@@ -56,13 +56,27 @@ class LatexmkEngines(BaseModel):
     postscript_mode: bool = False
 
 
+class SubdirCreation(str, Enum):
+    """Whether latexmk may create subdirectories of aux_dir (latexmk's $allow_subdir_creation)."""
+
+    NONE = "none"
+    AUX = "aux"  # only for aux files, e.g. \\include{chapters/chap}
+    ALL = "all"
+
+
 class LatexmkDirectories(BaseModel):
     out_dir: str = "build/"
     aux_dir: str = "build/aux/"
+    # Final output files (see out2_exts) are copied here; out_dir keeps intermediates
+    out2_dir: str | None = None
+    out2_exts: list[str] = Field(default_factory=list)
+    # Emulate aux_dir by moving files out of out_dir (for TeX engines without --aux-directory)
+    emulate_aux: bool | None = None
+    allow_subdir_creation: SubdirCreation | None = None
 
-    @field_validator("out_dir", "aux_dir")
+    @field_validator("out_dir", "aux_dir", "out2_dir")
     @classmethod
-    def ensure_trailing_slash(cls, v: str) -> str:
+    def ensure_trailing_slash(cls, v: str | None) -> str | None:
         if v and not v.endswith("/"):
             return v + "/"
         return v

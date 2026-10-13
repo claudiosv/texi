@@ -215,6 +215,7 @@ def format_perl_value(key: str, value: str | int | bool | list[str]) -> str:
             "clean": "2",
             "force-main": "3",
         }
+        subdirs: dict[str, str] = {"none": "0", "aux": "1", "all": "2"}
         update_methods: dict[str, str] = {
             "auto": "0",
             "manual": "1",
@@ -223,6 +224,8 @@ def format_perl_value(key: str, value: str | int | bool | list[str]) -> str:
             "command": "4",
         }
 
+        if key == "allow_subdir_creation" and value in subdirs:
+            return subdirs[value]
         if key == "go_mode" and value in go_modes:
             return go_modes[value]
         if key.endswith("_update_method") and value in update_methods:
@@ -325,11 +328,15 @@ def generate_latexmkrc(config: TexProjectConfig, rc_path: Path) -> None:
             continue
         if isinstance(value, list) and not value:
             continue
-        if in_subdir and key in ("out_dir", "aux_dir") and not os.path.isabs(value):
+        if (
+            in_subdir
+            and key in ("out_dir", "aux_dir", "out2_dir")
+            and not os.path.isabs(value)
+        ):
             rc_lines.append(f'${key} = "$root/{value}";')
             continue
-        if in_subdir and key == "default_files":
-            continue  # passed on the command line, relative to src_dir
+        if key == "default_files":
+            continue  # emitted below, relative to the project root
         if key in ("clean_ext", "clean_full_ext"):
             rc_lines.append(f"${key} = '{' '.join(value)}';")  # space-separated string
             continue
@@ -337,6 +344,10 @@ def generate_latexmkrc(config: TexProjectConfig, rc_path: Path) -> None:
         perl_val = format_perl_value(key, value)
         prefix = "@" if isinstance(value, list) else "$"
         rc_lines.append(f"{prefix}{key} = {perl_val};")
+    targets = [str(Path(config.src_dir) / f) for f in config.main_files]
+    if in_subdir:
+        rc_lines.append("$do_cd = 1;  # run in src_dir; paths below are from the root")
+    rc_lines.append(f"@default_files = ({', '.join(_perl_str(t) for t in targets)});")
     rc_lines.append("")
 
     commands = {n: engine_command(n, config.build) for n in _ENGINES}
@@ -1378,14 +1389,12 @@ def _run_latexmk(*, strict: bool, preview: bool, full: bool = False) -> None:
         for k, v in changed.items():
             console.print(f"[dim]env {escape(k)}={escape(v)}[/dim]")
     cmd = ["latexmk", *(["-norc", "-r", str(rc_path)] if EXPLICIT_RC else [])]
-    if config.src_dir not in ("", "."):
-        targets = [str(Path(config.src_dir) / f) for f in config.main_files]
-        if missing := [t for t in targets if not (cwd / t).is_file()]:
-            console.print(
-                f"[red]Error:[/red] source file(s) not found: {', '.join(missing)}"
-            )
-            raise typer.Exit(code=1)
-        cmd += ["-cd", *targets]
+    targets = [str(Path(config.src_dir) / f) for f in config.main_files]
+    if missing := [t for t in targets if not (cwd / t).is_file()]:
+        console.print(
+            f"[red]Error:[/red] source file(s) not found: {', '.join(missing)}"
+        )
+        raise typer.Exit(code=1)
     if not strict:
         cmd.append("-interaction=nonstopmode")
     _debug_cmd(cmd)
@@ -1433,7 +1442,8 @@ def build(
     _intro("texi build")
     if rm_pdf:
         config = load_project_config(Path.cwd() / "texproject.toml")
-        output_file = Path.cwd() / config.build.out_dir / f"{config.jobname}.pdf"
+        final_dir = config.build.out2_dir or config.build.out_dir
+        output_file = Path.cwd() / final_dir / f"{config.jobname}.pdf"
         if output_file.exists():
             console.print(f"[dim]Removing existing output file: {output_file}[/dim]")
             output_file.unlink()

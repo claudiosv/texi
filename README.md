@@ -43,7 +43,7 @@ texproject.toml
 .latexmkrc          # generated, keep at the project root
 .texenv/            # local TeX tree
 build/              # PDF and aux files
-src/main.tex        # latexmk -cd src/main.tex
+src/main.tex        # built via $do_cd + @default_files in .latexmkrc
 src/references.bib
 ```
 
@@ -76,7 +76,7 @@ bibtex_use = "always"
 | `main` | `"main.tex"` | The main `.tex` file, relative to `src_dir`. `build.default_files` overrides it (and allows several). |
 | `texlive` | none | Expected TeX Live year, e.g. `"2026"`. texi warns if the installed year differs. |
 | `repository` | none | tlmgr repository to install from, passed as `tlmgr --repository`. Point it at a frozen tlnet to really pin versions. |
-| `src_dir` | `"src"` | Directory holding the `.tex` sources. texi runs `latexmk -cd <src_dir>/<main file>`. Use `"."` for sources in the project root (then latexmk picks up `*.tex` itself). |
+| `src_dir` | `"src"` | Directory holding the `.tex` sources. the generated `.latexmkrc` sets `$do_cd = 1` and `@default_files`, so latexmk runs inside `src_dir`. Use `"."` for sources in the project root (then latexmk picks up `*.tex` itself). |
 | `dependencies` | `[]` | `tlmgr` package names installed into `.texenv/` by `texi sync` / `texi add`. |
 
 When `src_dir` is not `"."`, the generated `.latexmkrc` stays at the project root and:
@@ -129,7 +129,12 @@ Flags already present in a `lualatex = "…"` style override aren't repeated.
 | `out_dir` | `"build/"` | Where the final PDF goes (`$out_dir`). |
 | `aux_dir` | `"build/aux/"` | Where `.aux`, `.log`, `.fls` etc. go (`$aux_dir`). Set equal to `out_dir` to keep one folder. |
 
-A trailing `/` is added if missing. Relative paths are relative to the project root.
+| `out2_dir` | none | If set, the final files (`out2_exts`) are copied here, while `out_dir` keeps the intermediate output. |
+| `out2_exts` | latexmk's: `hnt`, `pdf`, `ps`, `synctex`, `synctex.gz` | Extensions copied to `out2_dir` (without the dot). |
+| `emulate_aux` | latexmk's default | Emulate `aux_dir` by moving files out of `out_dir`, for engines without `--aux-directory`. |
+| `allow_subdir_creation` | latexmk's default | May latexmk create subdirectories of `aux_dir`: `"none"`, `"aux"` (only for aux files, e.g. `\include{chapters/chap}`) or `"all"`. |
+
+A trailing `/` is added to the directories if missing. Relative paths are relative to the project root, even with a `src_dir` (texi writes `$do_cd = 1` and anchors them).
 
 #### Programs
 
