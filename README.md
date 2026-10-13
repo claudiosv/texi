@@ -11,7 +11,8 @@ An isolated workspace manager for LaTeX projects.
 | `texi init` | Creates `texproject.toml` (`[project]` with `name` = directory name, `src_dir = "src"`), seeding `dependencies` by scanning `.tex` files for `\usepackage`/`\RequirePackage`. |
 | `texi add <pkg>...` | Adds packages to `dependencies` and installs them. A name that isn't a TeX Live package (e.g. `binhex`) is resolved to the package that ships it (`kastrup`), asking you to confirm or choose. `--sync` runs a full sync afterwards. |
 | `texi sync` | Installs all `dependencies` into `.texenv/`, then updates them (`--no-update` to skip), and records the installed revisions in `texi.lock`. |
-| `texi build` | Generates `.latexmkrc` from the config and runs `latexmk`. `--strict` stops at the first error, `--full` forces a full rebuild (`go_mode = "full-rebuild"`), `--rm-pdf` deletes the old PDF first. |
+| `texi build` | Generates `.latexmkrc` from the config and runs `latexmk`. `--strict` stops at the first error, `--full` forces a full rebuild (`go_mode = "full-rebuild"`), `--rm-pdf` deletes the old PDF first, `--silent` cuts the output down to errors and the final status. |
+| `texi clean` | Deletes generated build files with `latexmk -c` (the PDF stays, plus the `clean_ext` extensions are removed). `--all` uses `-C` and deletes the PDF too. |
 | `texi preview` | Like `build`, but opens the viewer and rebuilds on every change (`latexmk -pvc`). |
 | `texi export <markdown\|html\|tex4ht\|latexml>` | Converts to `build/export/<format>/`: Markdown or HTML via pandoc (with citeproc and MathJax), HTML via TeX4ht (`make4ht`, needs `luaxml`) or LaTeXML (`latexmlc`). |
 | `texi fmt [files]` | Formats `.tex` files under `src_dir` with `tex-fmt`, using the settings in `[tex-fmt]`. `--check` only reports. |
@@ -115,6 +116,7 @@ One flat table. The keys are grouped below by what they control.
 |---|---|---|
 | `synctex` | `true` | Add `-synctex=1` to every engine command (pdflatex, lualatex, xelatex, latex). |
 | `shell_escape` | `false` | Add `-shell-escape`. |
+| `file_line_error` | `false` | Add `-file-line-error`, so errors read `file.tex:12: message` (editors and CI can parse that). |
 | `extra_args` | `[]` | Extra arguments for every engine command, e.g. `["-file-line-error"]`. |
 | `env` | `{}` | Extra environment variables for the build, as a `[build.env]` table. |
 | `bib_dirs` | `[]` | Extra directories (relative to the project root, or absolute) searched recursively for `.bib` files (`BIBINPUTS`). |
@@ -153,6 +155,7 @@ pdflatex = "pdflatex -shell-escape %O %S"
 
 | key | default | description |
 |---|---|---|
+| `silent` | `false` | Quiet latexmk and the TeX engines (latexmk `$silent`). `texi build --silent` turns it on for one run. |
 | `halt_on_error` | `true` | Stop at the first error. `texi build`/`preview` override it with `--strict`. |
 | `force_mode` | `false` | Keep going past errors (`-f`). Overridden by `--strict` (on unless strict). |
 | `go_mode` | `"rebuild"` | `"rebuild"` redo only what changed; `"full-rebuild"` redo everything (`-g`); `"clean"` delete generated files first (`-gg`); `"force-main"` rerun only the main compile, then continue (`-gt`). `texi build --full` sets `"full-rebuild"`. |

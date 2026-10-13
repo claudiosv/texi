@@ -255,6 +255,7 @@ _ENGINES = ("pdflatex", "lualatex", "xelatex", "latex")
 _NOT_LATEXMK = {
     "synctex",
     "shell_escape",
+    "file_line_error",
     "extra_args",
     "env",
     "bib_dirs",
@@ -267,6 +268,7 @@ def engine_command(name: str, cfg: BuildConfig) -> str | None:
     base = getattr(cfg, name)
     flags = ["-synctex=1"] if cfg.synctex else []
     flags += ["-shell-escape"] if cfg.shell_escape else []
+    flags += ["-file-line-error"] if cfg.file_line_error else []
     flags += cfg.extra_args
     flags = [f for f in flags if f not in (base or "").split()]
     if not flags:
@@ -321,6 +323,7 @@ def generate_latexmkrc(config: TexProjectConfig, rc_path: Path) -> None:
     rc_lines.append("")
 
     rc_lines.append("# --- Build ---")
+    rc_lines.append("$rc_report = 0;  # don't list the rc files read")
     for key, value in settings.items():
         if key == "optimize_pdf" or key in _NOT_LATEXMK or key in _ENGINES:
             continue
@@ -1351,7 +1354,14 @@ def add(
         )
 
 
-def _run_latexmk(*, strict: bool, preview: bool, full: bool = False) -> None:
+def _run_latexmk(
+    *,
+    strict: bool,
+    preview: bool,
+    full: bool = False,
+    clean: str | None = None,
+    silent: bool = False,
+) -> None:
     """Generate .latexmkrc (with CLI overrides) and run latexmk in the project."""
     cwd = Path.cwd()
     env_dir = cwd / ".texenv"
@@ -1361,18 +1371,21 @@ def _run_latexmk(*, strict: bool, preview: bool, full: bool = False) -> None:
     execution.halt_on_error = strict
     if full:
         execution.go_mode = GoMode.FULL_REBUILD
+    execution.silent = execution.silent or silent
     execution.force_mode = not strict
     execution.preview_mode = False
     execution.preview_continuous_mode = preview
     rc_path = cwd / ".latexmkrc"
     generate_latexmkrc(config, rc_path)
-    console.print("[dim]Generated .latexmkrc from texproject.toml[/dim]")
+    if not execution.silent:
+        console.print("[dim]Generated .latexmkrc from texproject.toml[/dim]")
 
     env = os.environ.copy()
     if env_dir.exists():
         env.update(_texenv_vars(env_dir))
         env["max_print_line"] = "100000"  # Avoid line wrapping in logs
-        console.print("[dim]Using local .texenv for compilation[/dim]")
+        if not execution.silent:
+            console.print("[dim]Using local .texenv for compilation[/dim]")
     else:
         console.print(
             "[yellow]Warning: .texenv not found. Run `texi sync` for isolated dependencies.[/yellow]"
@@ -1395,20 +1408,30 @@ def _run_latexmk(*, strict: bool, preview: bool, full: bool = False) -> None:
             f"[red]Error:[/red] source file(s) not found: {', '.join(missing)}"
         )
         raise typer.Exit(code=1)
-    if not strict:
+    if clean:
+        cmd.append(clean)
+    elif (
+        not strict and not execution.silent
+    ):  # silent mode runs the engines in batchmode
         cmd.append("-interaction=nonstopmode")
     _debug_cmd(cmd)
-    console.print("[bold blue]Starting latexmk...[/bold blue]\n")
+    if not execution.silent:
+        console.print(f"[bold blue]Running latexmk {clean or ''}...[/bold blue]\n")
     try:
         subprocess.run(cmd, env=env, check=True)
     except subprocess.CalledProcessError as e:
-        console.print("\n[red]✖ Build failed. Check the logs above.[/red]")
+        what = "Clean" if clean else "Build"
+        console.print(f"\n[red]✖ {what} failed. Check the logs above.[/red]")
         raise typer.Exit(code=1) from e
     except KeyboardInterrupt:  # normal way to leave -pvc
         if not preview:
             raise
         return
-    outro("[green]✔ Build completed successfully![/green]")
+    outro(
+        "[green]✔ Cleaned[/green]"
+        if clean
+        else "[green]✔ Build completed successfully![/green]"
+    )
 
 
 StrictOpt = Annotated[
@@ -1431,6 +1454,9 @@ def build(
         "--full",
         help="Rebuild everything, even if latexmk thinks nothing changed (go_mode = full-rebuild).",
     ),
+    silent: bool = typer.Option(
+        False, "--silent", "-s", help="Reduce output to errors and the final status."
+    ),
     rm_pdf: bool = typer.Option(
         False,
         "--rm-pdf",
@@ -1447,7 +1473,7 @@ def build(
         if output_file.exists():
             console.print(f"[dim]Removing existing output file: {output_file}[/dim]")
             output_file.unlink()
-    _run_latexmk(strict=strict, preview=False, full=full)
+    _run_latexmk(strict=strict, preview=False, full=full, silent=silent)
 
 
 def texfmt_config(cfg: TexFmtConfig) -> str:
@@ -1604,6 +1630,21 @@ def export(
         console.print(f"\n[red]✖ {tool} failed. Check the logs above.[/red]")
         raise typer.Exit(code=1) from e
     outro(f"[green]✔ Exported to {escape(str(target.relative_to(cwd)))}[/green]")
+
+
+@app.command(
+    help="Delete generated build files (latexmk -c). Add --all to delete the PDF too (-C).",
+    rich_help_panel="Build",
+)
+def clean(
+    all_files: bool = typer.Option(
+        False, "--all", help="Also delete the PDF and other final outputs (latexmk -C)."
+    ),
+    debug: DebugOpt = False,
+) -> None:
+    """Delete generated files with latexmk."""
+    _intro("texi clean")
+    _run_latexmk(strict=False, preview=False, clean="-C" if all_files else "-c")
 
 
 @app.command(
@@ -1866,6 +1907,7 @@ _ORDER = [
     "scan",
     "info",
     "build",
+    "clean",
     "preview",
     "fmt",
     "export",

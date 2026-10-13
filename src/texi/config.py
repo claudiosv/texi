@@ -112,6 +112,8 @@ class LatexmkPrograms(BaseModel):
 
 class LatexmkExecution(BaseModel):
     halt_on_error: bool = True
+    # Quiet latexmk and TeX engines: only errors and the final status are shown
+    silent: bool = False
     go_mode: GoMode = GoMode.REBUILD
     # -f: keep processing past errors (rc variable $force_mode)
     force_mode: bool = False
@@ -195,6 +197,8 @@ class BuildConfig(
     # Added to every TeX engine command (pdflatex, lualatex, xelatex, latex)
     synctex: bool = True
     shell_escape: bool = False
+    # Report errors as file:line:message, which editors and CI can parse
+    file_line_error: bool = False
     extra_args: list[str] = Field(default_factory=list)
     # Extra environment variables for the build, e.g. [build.env]
     env: dict[str, str] = Field(default_factory=dict)
