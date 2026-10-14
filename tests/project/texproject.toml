@@ -1,0 +1,6 @@
+# Fixture for exercising `texi build`'s log parsing: it compiles, with
+# undefined references/citations and overfull boxes. Run from this directory:
+#   texi build --full            # cleaned-up diagnostics
+#   texi build --full --raw      # latexmk's full output
+[project]
+name = "fixture"

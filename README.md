@@ -11,9 +11,9 @@ An isolated workspace manager for LaTeX projects.
 | `texi init` | Creates `texproject.toml` (`[project]` with `name` = directory name, `src_dir = "src"`), seeding `dependencies` by scanning `.tex` files for `\usepackage`/`\RequirePackage`. |
 | `texi add <pkg>...` | Adds packages to `dependencies` and installs them. A name that isn't a TeX Live package (e.g. `binhex`) is resolved to the package that ships it (`kastrup`), asking you to confirm or choose. `--sync` runs a full sync afterwards. |
 | `texi sync` | Installs all `dependencies` into `.texenv/`, then updates them (`--no-update` to skip), and records the installed revisions in `texi.lock`. |
-| `texi build` | Generates `.latexmkrc` from the config and runs `latexmk`. `--strict` stops at the first error, `--full` forces a full rebuild (`go_mode = "full-rebuild"`), `--rm-pdf` deletes the old PDF first, `--silent` cuts the output down to errors and the final status, `--diagnostics` shows latexmk's internal decisions. |
+| `texi build` | Generates `.latexmkrc` from the config and runs `latexmk`. `--strict` stops at the first error, `--full` forces a full rebuild (`go_mode = "full-rebuild"`), `--rm-pdf` deletes the old PDF first, `--silent` cuts the output down to errors and the final status, `--diagnostics` shows latexmk's internal decisions, `--raw` prints latexmk's full output. |
 | `texi clean` | Deletes generated build files with `latexmk -c` (the PDF stays, plus the `clean_ext` extensions are removed). `--all` uses `-C` and deletes the PDF too. |
-| `texi preview` | Like `build`, but opens the viewer and rebuilds on every change (`latexmk -pvc`). |
+| `texi preview` | Like `build` (same flags), but opens the viewer and rebuilds on every change (`latexmk -pvc`). |
 | `texi export <markdown\|html\|tex4ht\|latexml>` | Converts to `build/export/<format>/`: Markdown or HTML via pandoc (with citeproc and MathJax), HTML via TeX4ht (`make4ht`, needs `luaxml`) or LaTeXML (`latexmlc`). |
 | `texi fmt [files]` | Formats `.tex` files under `src_dir` with `tex-fmt`, using the settings in `[tex-fmt]`. `--check` only reports. |
 | `texi scan` | Lists the packages your sources use and their `tlmgr` dependencies. |
@@ -187,7 +187,7 @@ All default to unset (latexmk's own defaults).
 
 | key | description |
 |---|---|
-| `pdf_previewer`, `dvi_previewer`, `ps_previewer` | Viewer command for each output type. |
+| `pdf_previewer`, `dvi_previewer`, `ps_previewer` | Viewer command for each output type. On macOS, if Skim is installed and `pdf_previewer` is unset, texi uses `open -a Skim %O %S` with `pdf_update_method = "auto"` (Skim reloads changed files itself). |
 | `pdf_update_method`, `dvi_update_method`, `ps_update_method` | How the viewer shows a rebuilt file: `"auto"` (viewer watches the file), `"manual"` (you refresh it), `"signal"` (latexmk signals it), `"none"` (viewer locks the file, can't update), `"command"` (latexmk runs the `*_update_command`). |
 | `pdf_update_command`, `dvi_update_command`, `ps_update_command` | Command to run when the method is `"command"`. |
 | `pdf_update_signal`, `dvi_update_signal`, `ps_update_signal` | Signal number used with `"signal"` (1–64). |
@@ -208,6 +208,12 @@ Settings for `texi fmt`, rendered as a tex-fmt config and piped to `tex-fmt --co
 | `no_indent_envs` | `[]` | Extra environments whose contents aren't indented. |
 | `wrap_chars` | `[]` | Extra characters lines may be broken after. |
 | `format_tables` | `false` | Format tables. |
+
+## Build output
+
+`texi build` hides latexmk's output behind a progress line and, when it finishes, prints what matters from the TeX and biber/bibtex logs: errors with `file:line` and the offending source, warnings (undefined references, missing characters, …) de-duplicated, and a count of over/underfull boxes. A missing package (`File 'x.sty' not found`) comes with a `texi add x` hint. If a build fails without a parseable error, the tail of latexmk's output is shown. `texi build --guess-lines` fills in a line (shown as `~12`) for warnings TeX gives none, using the last line seen earlier in the same file, so treat it as "at or after". `texi build --raw` prints latexmk's complete output instead; `texi clean` always does. `texi preview` takes the same flags as `build` and prints the same summary after every rebuild, followed by "Watching for changes".
+
+File names for warnings come from tracking `(file` / `)` in the log, which is a heuristic: it can be off when a package prints unbalanced parentheses.
 
 ## Lockfile
 
