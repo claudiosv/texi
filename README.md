@@ -11,7 +11,7 @@ An isolated workspace manager for LaTeX projects.
 | `texi init` | Creates `texproject.toml` (`[project]` with `name` = directory name, `src_dir = "src"`), seeding `dependencies` by scanning `.tex` files for `\usepackage`/`\RequirePackage`. |
 | `texi add <pkg>...` | Adds packages to `dependencies` and installs them. A name that isn't a TeX Live package (e.g. `binhex`) is resolved to the package that ships it (`kastrup`), asking you to confirm or choose. `--sync` runs a full sync afterwards. |
 | `texi sync` | Installs all `dependencies` into `.texenv/`, then updates them (`--no-update` to skip), and records the installed revisions in `texi.lock`. |
-| `texi build` | Generates `.latexmkrc` from the config and runs `latexmk`. `--strict` stops at the first error, `--full` forces a full rebuild (`go_mode = "full-rebuild"`), `--rm-pdf` deletes the old PDF first, `--silent` cuts the output down to errors and the final status. |
+| `texi build` | Generates `.latexmkrc` from the config and runs `latexmk`. `--strict` stops at the first error, `--full` forces a full rebuild (`go_mode = "full-rebuild"`), `--rm-pdf` deletes the old PDF first, `--silent` cuts the output down to errors and the final status, `--diagnostics` shows latexmk's internal decisions. |
 | `texi clean` | Deletes generated build files with `latexmk -c` (the PDF stays, plus the `clean_ext` extensions are removed). `--all` uses `-C` and deletes the PDF too. |
 | `texi preview` | Like `build`, but opens the viewer and rebuilds on every change (`latexmk -pvc`). |
 | `texi export <markdown\|html\|tex4ht\|latexml>` | Converts to `build/export/<format>/`: Markdown or HTML via pandoc (with citeproc and MathJax), HTML via TeX4ht (`make4ht`, needs `luaxml`) or LaTeXML (`latexmlc`). |
@@ -155,6 +155,7 @@ pdflatex = "pdflatex -shell-escape %O %S"
 
 | key | default | description |
 |---|---|---|
+| `diagnostics` | `false` | Print latexmk's internal decisions (`$diagnostics`). `texi build --diagnostics` turns it on for one run. |
 | `silent` | `false` | Quiet latexmk and the TeX engines (latexmk `$silent`). `texi build --silent` turns it on for one run. |
 | `halt_on_error` | `true` | Stop at the first error. `texi build`/`preview` override it with `--strict`. |
 | `force_mode` | `false` | Keep going past errors (`-f`). Overridden by `--strict` (on unless strict). |

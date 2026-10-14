@@ -114,6 +114,8 @@ class LatexmkExecution(BaseModel):
     halt_on_error: bool = True
     # Quiet latexmk and TeX engines: only errors and the final status are shown
     silent: bool = False
+    # Print latexmk's internal decisions (dependency checks, rule resolution)
+    diagnostics: bool = False
     go_mode: GoMode = GoMode.REBUILD
     # -f: keep processing past errors (rc variable $force_mode)
     force_mode: bool = False

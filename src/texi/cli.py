@@ -1361,6 +1361,7 @@ def _run_latexmk(
     full: bool = False,
     clean: str | None = None,
     silent: bool = False,
+    diagnostics: bool = False,
 ) -> None:
     """Generate .latexmkrc (with CLI overrides) and run latexmk in the project."""
     cwd = Path.cwd()
@@ -1372,6 +1373,7 @@ def _run_latexmk(
     if full:
         execution.go_mode = GoMode.FULL_REBUILD
     execution.silent = execution.silent or silent
+    execution.diagnostics = execution.diagnostics or diagnostics
     execution.force_mode = not strict
     execution.preview_mode = False
     execution.preview_continuous_mode = preview
@@ -1457,6 +1459,9 @@ def build(
     silent: bool = typer.Option(
         False, "--silent", "-s", help="Reduce output to errors and the final status."
     ),
+    diagnostics: bool = typer.Option(
+        False, "--diagnostics", help="Show latexmk's internal decisions (very verbose)."
+    ),
     rm_pdf: bool = typer.Option(
         False,
         "--rm-pdf",
@@ -1473,7 +1478,13 @@ def build(
         if output_file.exists():
             console.print(f"[dim]Removing existing output file: {output_file}[/dim]")
             output_file.unlink()
-    _run_latexmk(strict=strict, preview=False, full=full, silent=silent)
+    _run_latexmk(
+        strict=strict,
+        preview=False,
+        full=full,
+        silent=silent,
+        diagnostics=diagnostics,
+    )
 
 
 def texfmt_config(cfg: TexFmtConfig) -> str:
@@ -1651,10 +1662,16 @@ def clean(
     help="Build, open the PDF viewer, and rebuild automatically whenever you save. Ctrl-C to stop.",
     rich_help_panel="Build",
 )
-def preview(strict: StrictOpt = False, debug: DebugOpt = False) -> None:
+def preview(
+    strict: StrictOpt = False,
+    diagnostics: bool = typer.Option(
+        False, "--diagnostics", help="Show latexmk's internal decisions (very verbose)."
+    ),
+    debug: DebugOpt = False,
+) -> None:
     """Build, open the viewer, and rebuild on every change (latexmk -pvc). Ctrl-C to stop."""
     _intro("texi preview")
-    _run_latexmk(strict=strict, preview=True)
+    _run_latexmk(strict=strict, preview=True, diagnostics=diagnostics)
 
 
 @app.command(
