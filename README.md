@@ -1,5 +1,7 @@
 # texi
 
+[Documentation](https://claudiosv.github.io/texi/)
+
 An isolated workspace manager for LaTeX projects.
 
 `texi` wraps `tlmgr` and `latexmk` to give each LaTeX project its own local TeX Live tree (`.texenv/`), so package versions are pinned per-project and system-wide TeX Live is never polluted.
