@@ -162,6 +162,7 @@ pdflatex = "pdflatex -shell-escape %O %S"
 | `diagnostics` | `false` | Print latexmk's internal decisions (`$diagnostics`). `texi build --diagnostics` turns it on for one run. |
 | `silent` | `false` | Quiet latexmk and the TeX engines (latexmk `$silent`). `texi build --silent` turns it on for one run. |
 | `check_type3` | `true` | After `texi build`/`preview`, warn if the PDF contains Type 3 fonts. texi only; not written to `.latexmkrc`. |
+| `write_latexmkrc` | `false` | Write the generated `.latexmkrc` to the project root. Off: texi pipes it to latexmk (`-norc -r /dev/stdin`) and nothing is written. Always written on Windows. texi only; not written to `.latexmkrc`. |
 | `halt_on_error` | `true` | Stop at the first error. `texi build`/`preview` override it with `--strict`. |
 | `force_mode` | `false` | Keep going past errors (`-f`). Overridden by `--strict` (on unless strict). |
 | `go_mode` | `"rebuild"` | `"rebuild"` redo only what changed; `"full-rebuild"` redo everything (`-g`); `"clean"` delete generated files first (`-gg`); `"force-main"` rerun only the main compile, then continue (`-gt`). `texi build --full` sets `"full-rebuild"`. |

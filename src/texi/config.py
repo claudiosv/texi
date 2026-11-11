@@ -118,6 +118,8 @@ class LatexmkExecution(BaseModel):
     diagnostics: bool = False
     # Warn after a build when the PDF contains Type 3 fonts (texi only, not latexmk)
     check_type3: bool = True
+    # Write the generated .latexmkrc to the project root. Off: it is piped to latexmk (texi only)
+    write_latexmkrc: bool = False
     go_mode: GoMode = GoMode.REBUILD
     # -f: keep processing past errors (rc variable $force_mode)
     force_mode: bool = False
