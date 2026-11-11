@@ -7,6 +7,8 @@ import re
 import textwrap
 import shutil
 import subprocess
+import urllib.parse
+import urllib.request
 import sys
 import time
 import tomllib
@@ -635,19 +637,45 @@ def save_sty_cache(cache: dict[str, list[str]]) -> None:
     path.write_text(json.dumps(cache, indent=2, sort_keys=True), encoding="utf-8")
 
 
-def find_bundle_for_sty(
-    sty_name: str,
-    console: Console,
-    cache: dict[str, list[str]] | None = None,
-    exts: tuple[str, ...] = (".sty", ".cls"),
-) -> list[str]:
-    """
-    Searches CTAN via tlmgr to find which package bundles
-    provide the exact {sty_name}.sty file.
-    """
-    if cache is not None and sty_name in cache:
-        return cache[sty_name]
+CTAN_API = "https://ctan.org/json/3.0"
 
+
+def _ctan_json(path: str) -> object | None:
+    """GET a CTAN JSON API path. None on any network or parse failure."""
+    try:
+        with urllib.request.urlopen(f"{CTAN_API}/{path}", timeout=10) as resp:  # noqa: S310
+            return json.load(resp)
+    except OSError, ValueError:
+        return None
+
+
+def find_texlive_for_ctan(name: str) -> list[str] | None:
+    """Ask CTAN which TeX Live package provides `name`, e.g. binhex -> kastrup.
+
+    Looks `name` up as a CTAN key or alias, then reads the `texlive` field of the
+    package record. None means CTAN could not be reached (do not cache that).
+    """
+    hits = _ctan_json(f"packages?key={urllib.parse.quote(name)}&include-aliases=true")
+    if not isinstance(hits, list):
+        return None
+    keys = [
+        h["key"]
+        for h in hits
+        if isinstance(h, dict) and str(h.get("key", "")).lower() == name.lower()
+    ]
+    found: list[str] = []
+    for key in keys:
+        info = _ctan_json(f"pkg/{urllib.parse.quote(key)}")
+        tl = info.get("texlive") if isinstance(info, dict) else None
+        if isinstance(tl, str) and tl and tl not in found:
+            found.append(tl)
+    return found
+
+
+def _search_bundles_tlmgr(
+    sty_name: str, console: Console, exts: tuple[str, ...]
+) -> list[str]:
+    """Ask `tlmgr search --file` which packages ship the exact file {sty_name}{ext}."""
     cmd: list[str] = [
         "tlmgr",
         "search",
@@ -694,10 +722,37 @@ def find_bundle_for_sty(
                 matched_bundles.append(bundle_name)
                 break  # Found it in this bundle, skip remaining files in this bundle
 
-    if cache is not None:
-        cache[sty_name] = matched_bundles
-
     return matched_bundles
+
+
+def find_bundle_for_sty(
+    sty_name: str,
+    console: Console,
+    cache: dict[str, list[str]] | None = None,
+    exts: tuple[str, ...] = (".sty", ".cls"),
+) -> list[str]:
+    """
+    Find the TeX Live packages that provide {sty_name}.
+
+    `tlmgr search --file` is the default. With several candidates, CTAN is asked
+    and its `texlive` field settles the choice when it is one of the candidates;
+    otherwise all candidates are returned for the caller to choose from. With no
+    candidates, CTAN is the fallback.
+    """
+    if cache is not None and sty_name in cache:
+        return cache[sty_name]
+
+    bundles = _search_bundles_tlmgr(sty_name, console, exts)
+    ctan: list[str] | None = None
+    settled = len(bundles) == 1
+    if not settled:  # none or ambiguous: CTAN knows the TeX Live name
+        ctan = find_texlive_for_ctan(sty_name)
+        if ctan:
+            exact = [b for b in bundles if b in ctan]
+            bundles = exact or ([] if bundles else ctan) or bundles
+    if cache is not None and (settled or ctan is not None):
+        cache[sty_name] = bundles  # an unanswered CTAN query is not remembered
+    return bundles
 
 
 _TEX_PACKAGE_RE = re.compile(
