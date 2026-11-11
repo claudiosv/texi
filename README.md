@@ -8,12 +8,13 @@ An isolated workspace manager for LaTeX projects.
 
 | command | what it does |
 |---|---|
-| `texi init` | Creates `texproject.toml` (`[project]` with `name` = directory name, `src_dir = "src"`), seeding `dependencies` by scanning `.tex` files for `\usepackage`/`\RequirePackage`. |
+| `texi init` | Creates `texproject.toml` (`[project]` with `name` = directory name, `src_dir = "src"`), seeding `dependencies` by scanning `.tex` files for `\usepackage`/`\RequirePackage`. `--texlive usermode\|copy\|install` picks how `.texenv/` is made (see `project.texlive_env`). |
 | `texi add <pkg>...` | Adds packages to `dependencies` and installs them. A name that isn't a TeX Live package (e.g. `binhex`) is resolved to the package that ships it (`kastrup`), asking you to confirm or choose. `--sync` runs a full sync afterwards. |
 | `texi sync` | Installs all `dependencies` into `.texenv/`, then updates them (`--no-update` to skip), and records the installed revisions in `texi.lock`. |
 | `texi build` | Generates `.latexmkrc` from the config and runs `latexmk`. `--strict` stops at the first error, `--full` forces a full rebuild (`go_mode = "full-rebuild"`), `--rm-pdf` deletes the old PDF first, `--silent` cuts the output down to errors and the final status, `--diagnostics` shows latexmk's internal decisions, `--raw` prints latexmk's full output. |
 | `texi clean` | Deletes generated build files with `latexmk -c` (the PDF stays, plus the `clean_ext` extensions are removed). `--all` uses `-C` and deletes the PDF too. |
 | `texi preview` | Like `build` (same flags), but opens the viewer and rebuilds on every change (`latexmk -pvc`). |
+| `texi fix-pdf [PDF]` | Deals with Type 3 fonts (rejected by ACM). The PDF defaults to the project's built PDF. `--method advise` (default) lists each Type 3 font with its pages, whether it is vector or bitmap, a guess where it came from, and how to fix it. `--method outline` converts vector Type 3 fonts to embedded TrueType (`-o` output, default `<name>.fixed.pdf`; `--in-place` overwrites and keeps a `.bak`); bitmap fonts cannot be converted. `--method rebuild` checks for Type 1 fonts (cm-super), rebuilds the project and re-checks the PDF. Exits 1 if Type 3 fonts remain. |
 | `texi export <markdown\|html\|tex4ht\|latexml>` | Converts to `build/export/<format>/`: Markdown or HTML via pandoc (with citeproc and MathJax), HTML via TeX4ht (`make4ht`, needs `luaxml`) or LaTeXML (`latexmlc`). |
 | `texi fmt [files]` | Formats `.tex` files under `src_dir` with `tex-fmt`, using the settings in `[tex-fmt]`. `--check` only reports. |
 | `texi scan` | Lists the packages your sources use and their `tlmgr` dependencies. |
@@ -75,6 +76,7 @@ bibtex_use = "always"
 |---|---|---|
 | `name` | none | Project name. Used as the latexmk `$jobname` (so the PDF is `<name>.pdf`) unless `build.jobname` is set. `texi init` sets it to the directory name. |
 | `main` | `"main.tex"` | The main `.tex` file, relative to `src_dir`. `build.default_files` overrides it (and allows several). |
+| `texlive_env` | `"usermode"` | How `.texenv/` is made. `usermode`: a tlmgr usertree layered over the system TeX Live. `copy`: a standalone tree copied from the system install (a minimal package set, own `tlpkg/texlive.tlpdb`; approach from [texenv](https://github.com/ricklyon/texenv)); `tlmgr` then installs into `.texenv/` only. `install`: a fresh `install-tl` (scheme minimal plus latex and latexmk) into `.texenv/`. |
 | `texlive` | none | Expected TeX Live year, e.g. `"2026"`. texi warns if the installed year differs. |
 | `repository` | none | tlmgr repository to install from, passed as `tlmgr --repository`. Point it at a frozen tlnet to really pin versions. |
 | `src_dir` | `"src"` | Directory holding the `.tex` sources. the generated `.latexmkrc` sets `$do_cd = 1` and `@default_files`, so latexmk runs inside `src_dir`. Use `"."` for sources in the project root (then latexmk picks up `*.tex` itself). |
@@ -157,6 +159,7 @@ pdflatex = "pdflatex -shell-escape %O %S"
 |---|---|---|
 | `diagnostics` | `false` | Print latexmk's internal decisions (`$diagnostics`). `texi build --diagnostics` turns it on for one run. |
 | `silent` | `false` | Quiet latexmk and the TeX engines (latexmk `$silent`). `texi build --silent` turns it on for one run. |
+| `check_type3` | `true` | After `texi build`/`preview`, warn if the PDF contains Type 3 fonts. texi only; not written to `.latexmkrc`. |
 | `halt_on_error` | `true` | Stop at the first error. `texi build`/`preview` override it with `--strict`. |
 | `force_mode` | `false` | Keep going past errors (`-f`). Overridden by `--strict` (on unless strict). |
 | `go_mode` | `"rebuild"` | `"rebuild"` redo only what changed; `"full-rebuild"` redo everything (`-g`); `"clean"` delete generated files first (`-gg`); `"force-main"` rerun only the main compile, then continue (`-gt`). `texi build --full` sets `"full-rebuild"`. |

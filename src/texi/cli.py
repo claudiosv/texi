@@ -14,6 +14,7 @@ from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Annotated, Any
 
+import httpx
 import inflect
 import sh
 import typer
@@ -28,7 +29,7 @@ from rich.markup import escape
 from rich.text import Text
 from rich.tree import Tree
 
-from texi import tools
+from texi import pdffonts, texenv, tools
 from texi.logparse import (
     Diagnostic,
     dedupe,
@@ -83,6 +84,7 @@ DebugOpt = Annotated[
 @app.callback()
 def main(debug: DebugOpt = False) -> None:
     """LaTeX project workspace manager."""
+    _activate_env(Path.cwd() / ".texenv")
 
 
 def _debug_cmd(cmd: list[str], out: Console | None = None) -> None:
@@ -141,7 +143,9 @@ def _updmap_local(env_dir: Path) -> None:
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     """Run a command, echoing it and its stdout/stderr under --debug."""
     _debug_cmd(cmd)
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, check=False, stdin=subprocess.DEVNULL
+    )
     if DEBUG:
         console.print(
             f"[dim]exit {result.returncode}\n--- stdout ---\n{escape(result.stdout)}"
@@ -170,6 +174,12 @@ texfmt_path = shutil.which("tex-fmt")
 inflect_engine = inflect.engine()
 
 # --- Core Logic ---
+
+
+class TexliveMode(str, Enum):
+    USERMODE = "usermode"
+    COPY = "copy"
+    INSTALL = "install"
 
 
 def load_project_config(config_path: Path) -> TexProjectConfig:
@@ -269,6 +279,7 @@ _NOT_LATEXMK = {
     "env",
     "bib_dirs",
     "tex_inputs",
+    "check_type3",
 }
 
 
@@ -329,6 +340,8 @@ def generate_latexmkrc(config: TexProjectConfig, rc_path: Path) -> None:
         '  $ENV{TEXMFHOME} = "$root/.texenv";',
         '  $ENV{TEXMFVAR} = "$root/.texenv/texmf-var";  # font maps from updmap-user',
         '  $ENV{TEXMFCONFIG} = "$root/.texenv/texmf-config";',
+        '  my ($bin) = glob("$root/.texenv/bin/*");  # standalone tree (texlive_env = copy/install)',
+        '  $ENV{PATH} = "$bin:$ENV{PATH}" if $bin;',
         "}",
         '$ENV{max_print_line} = "100000";  # avoid line wrapping in logs',
     ]
@@ -451,8 +464,7 @@ def _get_tlmgr_info_output(
     *cmd_input: list[str], data_fields: list[str], env_dir: Path
 ) -> Generator[dict[str, Any | str] | dict[str, Any], Any, None]:
     tlmgr_result = _tlmgr_info(
-        "--usertree",
-        str(env_dir),
+        *([] if _standalone(env_dir) else ["--usertree", str(env_dir)]),
         "--data",
         ",".join(data_fields),
         *cmd_input,
@@ -570,6 +582,14 @@ def filter_packages(
     installable_local_packages = [
         p for p in set(installable_local_packages) if p not in in_usertree
     ]
+    if _standalone(env_dir):  # one tree: nothing is "system" or non-relocatable
+        installable_local_packages += [
+            p for p in installable_system_packages if p not in in_usertree
+        ]
+        already_installed += [
+            p for p in installable_system_packages if p in in_usertree
+        ]
+        installable_system_packages = []
     installable_system_packages = list(set(installable_system_packages))
     already_installed = list(set(already_installed))
 
@@ -795,6 +815,15 @@ def init(
     force: bool = typer.Option(
         False, "--force", help="Replace an existing texproject.toml."
     ),
+    texlive: Annotated[
+        TexliveMode,
+        typer.Option(
+            "--texlive",
+            help="How to build .texenv/: usermode (tlmgr usertree over the system TeX Live), "
+            "copy (standalone tree copied from the system install), "
+            "install (fresh install-tl installation).",
+        ),
+    ] = TexliveMode.USERMODE,
     debug: DebugOpt = False,
 ) -> None:
     """Creates a texproject.toml, scanning any .tex files for package dependencies."""
@@ -838,7 +867,9 @@ def init(
 
     try:
         config = TexProjectConfig(
-            project=ProjectConfig(name=cwd.name, dependencies=dependencies)
+            project=ProjectConfig(
+                name=cwd.name, dependencies=dependencies, texlive_env=texlive.value
+            )
         )
     except ValidationError as e:
         console.print("[red]Configuration Validation Error:[/red]")
@@ -850,6 +881,7 @@ def init(
         f'name = "{config.name}"',
         f'src_dir = "{config.src_dir}"',
         f'main = "{config.project.main}"',
+        f'texlive_env = "{config.project.texlive_env}"',
         "",
         "dependencies = [",
     ]
@@ -857,6 +889,7 @@ def init(
     lines.append("]")
     lines.append("")
     config_path.write_text("\n".join(lines), encoding="utf-8")
+    _create_env(texlive.value, config.project.repository)
 
     outro(
         f"[green]✔ Created {config_path.name} with {len(dependencies)} dependencies.[/green]"
@@ -864,6 +897,59 @@ def init(
 
 
 LOCK_NAME = "texi.lock"
+
+
+def _standalone(env_dir: Path) -> bool:
+    """True if .texenv/ is a full TeX Live tree (copy/install) rather than a usertree."""
+    return texenv.env_bin(env_dir) is not None
+
+
+def _activate_env(env_dir: Path) -> None:
+    """Put a standalone .texenv/'s binaries first on PATH, so tlmgr, latexmk and the engines come from it."""
+    global tlmgr_path, latexmk_path
+    if not (bin_dir := texenv.env_bin(env_dir)):
+        return
+    # every tool (tlmgr, fmtutil, updmap, mktexlsr, luaotfload...) now resolves to the env
+    os.environ.update(_texenv_vars(env_dir))
+    os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
+    tlmgr_path = shutil.which("tlmgr")
+    latexmk_path = shutil.which("latexmk")
+
+
+def _create_env(mode: str, repository: str | None = None) -> None:
+    """Create a standalone .texenv/ for mode copy/install (no-op for usermode or if it exists)."""
+    env_dir = Path.cwd() / ".texenv"
+    if mode == "usermode" or _standalone(env_dir):
+        return
+    if mode == "copy":
+        root = _run(["kpsewhich", "-var-value=TEXMFROOT"]).stdout.strip()
+        if not root:
+            console.print("[red]No system TeX Live found to copy from.[/red]")
+            raise typer.Exit(code=1)
+        console.print(f"[blue]Copying minimal package set from {root}...[/blue]")
+        texenv.create_env(env_dir, Path(root))
+    else:
+        console.print(
+            "[blue]Installing TeX Live into .texenv/ (this takes a while)...[/blue]"
+        )
+        try:
+            texenv.install_env(env_dir, repository)
+        except (OSError, httpx.HTTPError, subprocess.CalledProcessError) as e:
+            console.print(f"[red]install-tl failed: {escape(str(e))}[/red]")
+            raise typer.Exit(code=1) from e
+    _activate_env(env_dir)
+    if mode == "copy":  # the copied ls-R lists system files; rebuild it for this tree
+        _run(["mktexlsr", str(env_dir / "texmf-dist")])
+        # the copied configs list every system language/map; keep only what the env has
+        _run([*_tl(), "generate", "language"])
+        subprocess.run(  # asks "Do you really want to continue (y/N)?" before editing updmap.cfg
+            ["updmap-sys", "--syncwithtrees"],
+            input="y\n",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    console.print("[green]✔ Created .texenv/[/green]")
 
 
 def _apply_project_tlmgr(config: TexProjectConfig) -> None:
@@ -1042,8 +1128,10 @@ def _update_tlmgr() -> None:
 
 
 def _ensure_latexmk() -> None:
-    """Install latexmk into the system TeX Live if it's not on PATH."""
-    if shutil.which("latexmk"):
+    """Install latexmk into the TeX Live tree in use (.texenv/ if standalone) if it's not there."""
+    found = shutil.which("latexmk")
+    env_bin = texenv.env_bin(Path.cwd() / ".texenv")
+    if found and (env_bin is None or Path(found).parent == env_bin):
         return
     if not tlmgr_path:
         console.print("[red]latexmk and tlmgr not found; install TeX Live.[/red]")
@@ -1053,7 +1141,9 @@ def _ensure_latexmk() -> None:
     for attempt in range(2):
         with ShimmerProgress(console) as prog:
             _install(prog, "Installing latexmk", install)
-        if shutil.which("latexmk"):
+        if shutil.which("latexmk") and (
+            env_bin is None or Path(shutil.which("latexmk")).parent == env_bin
+        ):
             return
         if attempt == 0:  # tlmgr refuses to install anything while it is outdated
             console.print(
@@ -1148,6 +1238,9 @@ def _sync(
 ) -> None:
     """Install `packages` into .texenv/ (and update them unless no_update)."""
     env_dir = Path.cwd() / ".texenv"
+    project = load_project_config(Path.cwd() / "texproject.toml").project
+    _create_env(project.texlive_env, project.repository)
+    standalone = _standalone(env_dir)
 
     if tlmgr_path:
         _ensure_tl_writable()
@@ -1165,7 +1258,7 @@ def _sync(
 
     with ShimmerProgress(console) as prog:
         if tlpdb_path.exists():
-            console.print("[green]Local usertree already initialized.[/green]")
+            console.print("[green]Local TeX tree already initialized.[/green]")
         else:
             prog.on_progress("Initializing local usertree")
             init_cmd = [*_tl(), "init-usertree", "--usertree", str(env_dir)]
@@ -1212,9 +1305,7 @@ def _sync(
                 [
                     *_tl(),
                     "install",
-                    "--usertree",
-                    str(env_dir),
-                    "--usermode",
+                    *([] if standalone else ["--usertree", str(env_dir), "--usermode"]),
                     *valid_dependencies,
                     "--machine-readable",
                 ],
@@ -1245,9 +1336,11 @@ def _sync(
                     [
                         *_tl(),
                         "update",
-                        "--usertree",
-                        str(env_dir),
-                        "--usermode",
+                        *(
+                            []
+                            if standalone
+                            else ["--usertree", str(env_dir), "--usermode"]
+                        ),
                         "--machine-readable",
                         *local,
                     ],
@@ -1259,7 +1352,8 @@ def _sync(
                     [*_tl(), "update", "--machine-readable", *system],
                 )
 
-    _updmap_local(env_dir)
+    if not standalone:  # tlmgr maintains font maps itself in a full tree
+        _updmap_local(env_dir)
     _update_lock(Path.cwd(), all_dependencies, keep if keep is not None else packages)
     _note(
         title=f"Synced {len(all_dependencies)} {plural('dependency', len(all_dependencies))} into .texenv/",
@@ -1497,6 +1591,41 @@ def _report(config: TexProjectConfig, since: float, output: str, guess: bool) ->
     return any(d.kind == "error" for d in diags)
 
 
+def _pdf_path(config: TexProjectConfig) -> Path:
+    """Where latexmk leaves the final PDF."""
+    final_dir = config.build.out2_dir or config.build.out_dir
+    return Path.cwd() / final_dir / f"{config.jobname}.pdf"
+
+
+def _warn_type3(pdf: Path) -> None:
+    """Orange warning if the PDF has Type 3 fonts. Never raises: a broken PDF must not fail a build."""
+    try:
+        if not pdf.is_file():
+            return
+        fonts = pdffonts.find_type3(pdf)
+    except Exception as e:
+        console.print(
+            f"[dim]Could not check {escape(pdf.name)} for Type 3 fonts: {escape(str(e))}[/dim]"
+        )
+        return
+    if not fonts:
+        return
+    names = ", ".join(f.name for f in fonts)
+    console.print(
+        f"[orange1]⚠ {len(fonts)} Type 3 font(s) in {escape(str(pdf.name))}: "
+        f"{escape(names)}. ACM does not accept Type 3 fonts.[/orange1]"
+    )
+    console.print(
+        '[dim]  matplotlib: plt.rcParams["pdf.fonttype"] = 42 (then re-export the figure)[/dim]'
+    )
+    console.print("[dim]  Run `texi fix-pdf` for options.[/dim]")
+
+
+def _check_type3(config: TexProjectConfig) -> None:
+    if config.build.check_type3:
+        _warn_type3(_pdf_path(config))
+
+
 def _watch_captured(
     cmd: list[str], env: dict[str, str], config: TexProjectConfig, guess: bool
 ) -> None:
@@ -1522,6 +1651,8 @@ def _watch_captured(
                 failed = _report(config, started, output, guess) or (
                     "Errors, in force_mode" in output or "Failure" in output
                 )
+                if not failed:
+                    _check_type3(config)
                 console.print(
                     "[red]✖ Build failed.[/red]"
                     if failed
@@ -1602,7 +1733,15 @@ def _run_latexmk(
             "[yellow]Warning: .texenv not found. Run `texi sync` for isolated dependencies.[/yellow]"
         )
 
-    _ensure_latexmk()
+    if config.project.texlive_env == "usermode":
+        _ensure_latexmk()
+    elif not (
+        (b := texenv.env_bin(env_dir)) and (b / "latexmk").exists()
+    ):  # never fall back to the system latexmk
+        console.print(
+            "[red]latexmk not found in .texenv/. Run `texi sync` to install it.[/red]"
+        )
+        raise typer.Exit(code=1)
     if DEBUG:
         console.print(f"[dim]latexmk: {escape(str(shutil.which('latexmk')))}[/dim]")
         changed = {k: v for k, v in env.items() if os.environ.get(k) != v}
@@ -1642,6 +1781,7 @@ def _run_latexmk(
                 console.print("[dim]Run with --raw for the full latexmk output.[/dim]")
             console.print("\n[red]✖ Build failed.[/red]")
             raise typer.Exit(code=1)
+        _check_type3(config)
         outro("[green]✔ Build completed successfully![/green]")
         return
     try:
@@ -1654,6 +1794,8 @@ def _run_latexmk(
         if not preview:
             raise
         return
+    if not clean:
+        _check_type3(config)
     outro(
         "[green]✔ Cleaned[/green]"
         if clean
@@ -1713,8 +1855,7 @@ RmPdfOpt = Annotated[
 
 def _remove_pdf() -> None:
     config = load_project_config(Path.cwd() / "texproject.toml")
-    final_dir = config.build.out2_dir or config.build.out_dir
-    output_file = Path.cwd() / final_dir / f"{config.jobname}.pdf"
+    output_file = _pdf_path(config)
     if output_file.exists():
         console.print(f"[dim]Removing existing output file: {output_file}[/dim]")
         output_file.unlink()
@@ -1949,6 +2090,144 @@ def preview(
     )
 
 
+class FixMethod(str, Enum):
+    ADVISE = "advise"
+    OUTLINE = "outline"
+    REBUILD = "rebuild"
+
+
+def _print_type3_report(fonts: list[pdffonts.Type3Font]) -> None:
+    for f in fonts:
+        pages = ", ".join(map(str, f.pages[:15])) + (" …" if len(f.pages) > 15 else "")
+        extra = f"; {f.origin}" if f.origin else ""
+        console.print(
+            f"[orange1]•[/orange1] [bold]{escape(f.name)}[/bold]  "
+            f"{f.kind or 'unclassified'}{escape(extra)}  [dim](pages {pages})[/dim]"
+        )
+
+
+def _fix_outline(pdf: Path, output: Path | None, in_place: bool) -> None:
+    out = pdf.with_suffix(".fixed.pdf") if output is None else output
+    if in_place:
+        out = pdf.with_name(pdf.stem + ".texi-tmp.pdf")
+    report = pdffonts.convert_outlines(pdf, out)
+    if in_place:
+        shutil.copy2(pdf, pdf.with_suffix(pdf.suffix + ".bak"))
+        out.replace(pdf)
+        report.output = pdf
+    if report.converted:
+        console.print(
+            f"[green]✔ Converted {len(report.converted)} vector font(s) to TrueType: "
+            f"{escape(', '.join(f.name for f in report.converted))}[/green]"
+        )
+    for f in report.skipped:
+        why = report.errors.get(f.xref) or f.kind
+        console.print(
+            f"[yellow]Left alone: {escape(f.name)} ({escape(why)}); "
+            "bitmap fonts cannot be converted.[/yellow]"
+        )
+    console.print(f"[dim]Wrote {escape(str(report.output))}[/dim]")
+    if report.remaining:
+        console.print(f"[red]✖ {len(report.remaining)} Type 3 font(s) remain:[/red]")
+        _print_type3_report(report.remaining)
+        for line in pdffonts.suggestion_text():
+            console.print(f"[dim]{escape(line)}[/dim]")
+        raise typer.Exit(code=1)
+    outro("[green]✔ No Type 3 fonts left[/green]")
+
+
+def _fix_rebuild(config: TexProjectConfig, pdf: Path) -> None:
+    try:
+        have_t1 = bool(tools.kpsewhich("sfrm1000.pfb"))  # cm-super's Type 1 fonts
+    except sh.ErrorReturnCode, sh.CommandNotFound:
+        have_t1 = False
+    if have_t1:
+        console.print("[green]✔ cm-super Type 1 fonts found[/green]")
+    else:
+        console.print(
+            "[yellow]cm-super Type 1 fonts not found. Install with: "
+            "texi add cm-super (or tlmgr install cm-super), and use "
+            f"{escape(chr(92) + 'usepackage[T1]{fontenc}')}.[/yellow]"
+        )
+    console.print(f"[dim]pdf_mode is {config.build.pdf_mode.value}[/dim]")
+    _run_latexmk(strict=False, preview=False, raw=False)
+    fonts = pdffonts.classify(pdf) if pdf.is_file() else []
+    if fonts:
+        console.print(f"[red]✖ {len(fonts)} Type 3 font(s) remain:[/red]")
+        _print_type3_report(fonts)
+        raise typer.Exit(code=1)
+    console.print("[green]✔ No Type 3 fonts after rebuild[/green]")
+
+
+@app.command(
+    name="fix-pdf",
+    help="Find Type 3 fonts in a PDF (ACM rejects them) and fix or explain them.",
+    rich_help_panel="Build",
+)
+def fix_pdf(
+    pdf: Annotated[
+        Path | None,
+        typer.Argument(help="PDF to check. Default: the project's built PDF."),
+    ] = None,
+    method: Annotated[
+        FixMethod,
+        typer.Option(
+            "--method",
+            "-m",
+            help="advise: report and explain (default). outline: convert vector "
+            "Type 3 fonts to TrueType. rebuild: check TeX fonts and rebuild.",
+        ),
+    ] = FixMethod.ADVISE,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output", "-o", help="Output for outline (default: <name>.fixed.pdf)."
+        ),
+    ] = None,
+    in_place: Annotated[
+        bool,
+        typer.Option(
+            "--in-place", help="outline: overwrite the PDF, keeping a .bak copy."
+        ),
+    ] = False,
+    debug: DebugOpt = False,
+) -> None:
+    """Detect Type 3 fonts and suggest or apply a fix."""
+    _intro("texi fix-pdf")
+    config = None
+    if pdf is None or method is FixMethod.REBUILD:
+        config = load_project_config(Path.cwd() / "texproject.toml")
+    if pdf is None:
+        assert config is not None
+        pdf = _pdf_path(config)
+    if not pdf.is_file():
+        console.print(f"[red]Error:[/red] PDF not found: {escape(str(pdf))}")
+        raise typer.Exit(code=1)
+    if method is FixMethod.REBUILD:
+        assert config is not None
+        _fix_rebuild(config, pdf)
+        return
+    try:
+        fonts = pdffonts.classify(pdf)
+    except Exception as e:
+        console.print(
+            f"[red]Error:[/red] cannot read {escape(str(pdf))}: {escape(str(e))}"
+        )
+        raise typer.Exit(code=1) from e
+    if not fonts:
+        outro("[green]✔ No Type 3 fonts[/green]")
+        return
+    console.print(
+        f"[orange1]⚠ {len(fonts)} Type 3 font(s) in {escape(pdf.name)}:[/orange1]"
+    )
+    _print_type3_report(fonts)
+    if method is FixMethod.ADVISE:
+        for line in pdffonts.suggestion_text():
+            console.print(f"[dim]{escape(line)}[/dim]")
+        return
+    _fix_outline(pdf, output, in_place)
+
+
 @app.command(
     help="Show which files the last build actually read, as a directory tree.",
     rich_help_panel="Build",
@@ -2075,6 +2354,9 @@ def formats(
     user: bool = typer.Option(
         False, "--user", help="Rebuild user formats (fmtutil-user)."
     ),
+    missing: bool = typer.Option(
+        False, "--missing", help="Only build formats that don't exist yet."
+    ),
     yes: bool = typer.Option(
         False,
         "--yes",
@@ -2083,10 +2365,13 @@ def formats(
     ),
 ) -> None:
     """Rebuild LaTeX formats (system via sudo by default)."""
-    sudo = False if user else _needs_sudo("fmtutil-sys --all", yes=yes)
+    flag = "--missing" if missing else "--all"
+    sudo = False if user else _needs_sudo(f"fmtutil-sys {flag}", yes=yes)
     try:
         console.print(
-            escape(tools.fmtutil_user() if user else tools.fmtutil_sys(sudo=sudo))
+            escape(
+                tools.fmtutil_user(flag) if user else tools.fmtutil_sys(flag, sudo=sudo)
+            )
         )
     except sh.ErrorReturnCode as e:
         console.print(f"[red]{escape(str(e))}[/red]")
@@ -2201,6 +2486,7 @@ _ORDER = [
     "build",
     "clean",
     "preview",
+    "fix_pdf",
     "fmt",
     "export",
     "tree",

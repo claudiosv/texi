@@ -4,3 +4,4 @@
 #   texi build --full --raw      # latexmk's full output
 [project]
 name = "fixture"
+texlive_env = "install" # or copy or usermode

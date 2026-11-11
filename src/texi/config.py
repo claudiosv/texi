@@ -116,6 +116,8 @@ class LatexmkExecution(BaseModel):
     silent: bool = False
     # Print latexmk's internal decisions (dependency checks, rule resolution)
     diagnostics: bool = False
+    # Warn after a build when the PDF contains Type 3 fonts (texi only, not latexmk)
+    check_type3: bool = True
     go_mode: GoMode = GoMode.REBUILD
     # -f: keep processing past errors (rc variable $force_mode)
     force_mode: bool = False
@@ -216,6 +218,10 @@ class ProjectConfig(BaseModel):
     main: str = "main.tex"
     # Expected TeX Live year (e.g. "2026"); texi warns if the installed one differs
     texlive: str | None = None
+    # How .texenv/ is made: "usermode" = tlmgr usertree over the system TeX Live,
+    # "copy" = standalone tree copied from the system install (minimal package set),
+    # "install" = fresh install-tl installation
+    texlive_env: Literal["usermode", "copy", "install"] = "usermode"
     # tlmgr repository to install from; point at a frozen tlnet to truly pin versions
     repository: str | None = None
     # Directory holding the .tex sources; "." = project root. latexmk runs with -cd.
