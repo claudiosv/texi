@@ -1,0 +1,16 @@
+{
+  "key": "knuth",
+  "givenname": "Donald E.",
+  "von": "",
+  "familyname": "Knuth",
+  "junior": "",
+  "female": false,
+  "died": false,
+  "packages": [
+    "latex-fonts",
+    "cweb",
+    "cm-mf",
+    "cm",
+    "cm-tfm"
+  ]
+}

@@ -17,6 +17,8 @@ dependencies = [
     "pyclack-cli",
     "pymupdf>=2.1",
     "fonttools>=4.68.0",
+    "hishel[httpx2]>=2.0.0",
+    "httpx2>=2.16.0",
 ]
 keywords = ["latex", "texlive", "tlmgr", "latexmk", "workspace"]
 classifiers = [
@@ -59,3 +61,6 @@ docs = [
     "mkdocstrings-python>=2.0.10",
     "mkdocstrings[python]>=1.0.8",
 ]
+
+[tool.pytest.ini_options]
+markers = ["network: hits the live CTAN API; skipped unless --network or TEXI_NETWORK=1"]

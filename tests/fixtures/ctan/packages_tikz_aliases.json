@@ -1,0 +1,12 @@
+[
+  {
+    "key": "tikz-cd",
+    "name": "TikZ-cd",
+    "caption": "Create commutative diagrams with TikZ"
+  },
+  {
+    "alias": "tikz",
+    "name": "TikZ",
+    "pkg": "pgf"
+  }
+]

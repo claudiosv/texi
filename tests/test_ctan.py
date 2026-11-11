@@ -1,48 +1,69 @@
+from pathlib import Path
+
+import httpx2
 import pytest
 
 from texi import cli
+from texi.ctan import CtanClient
 
 
-def fake_ctan(responses: dict[str, object]):
-    def _fake(path: str) -> object | None:
-        return responses.get(path)
+def use_ctan(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, routes: dict[str, object]
+) -> None:
+    """Point cli at a real CtanClient over a mock transport; unknown paths 404."""
 
-    return _fake
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        key = request.url.path.removeprefix("/json/3.0/")
+        if request.url.query:
+            key += f"?{request.url.query.decode()}"
+        if key in routes:
+            return httpx2.Response(200, json=routes[key])
+        return httpx2.Response(404, json={"errors": ["Not found"]})
 
-
-def test_ctan_alias_maps_to_texlive_name(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         cli,
-        "_ctan_json",
-        fake_ctan({
+        "CtanClient",
+        lambda: CtanClient(transport=httpx2.MockTransport(handler), cache_dir=tmp_path),
+    )
+
+
+def test_ctan_alias_maps_to_texlive_name(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    use_ctan(
+        monkeypatch,
+        tmp_path,
+        {
             "packages?key=binhex&include-aliases=true": [
                 {"key": "binhex", "name": "binhex", "caption": "Convert numbers"},
                 {"key": "binhex-extra", "name": "x", "caption": "y"},
             ],
-            "pkg/binhex": {"name": "binhex", "texlive": "kastrup"},
-        }),
+            "pkg/binhex": {"id": "binhex", "name": "binhex", "texlive": "kastrup"},
+        },
     )
     assert cli.find_texlive_for_ctan("binhex") == ["kastrup"]
 
 
-def test_ctan_package_not_in_texlive(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        cli,
-        "_ctan_json",
-        fake_ctan({
+def test_ctan_package_not_in_texlive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    use_ctan(
+        monkeypatch,
+        tmp_path,
+        {
             "packages?key=foo&include-aliases=true": [{"key": "foo"}],
-            "pkg/foo": {"name": "foo", "texlive": None},
-        }),
+            "pkg/foo": {"id": "foo", "name": "foo", "texlive": None},
+        },
     )
     assert cli.find_texlive_for_ctan("foo") == []
 
 
-def test_ctan_no_match_and_offline(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        cli, "_ctan_json", fake_ctan({"packages?key=nope&include-aliases=true": []})
-    )
+def test_ctan_no_match_and_offline(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    use_ctan(monkeypatch, tmp_path, {"packages?key=nope&include-aliases=true": []})
     assert cli.find_texlive_for_ctan("nope") == []
-    monkeypatch.setattr(cli, "_ctan_json", fake_ctan({}))
+    use_ctan(monkeypatch, tmp_path / "b", {})  # 404 on the list -> unreachable
     assert cli.find_texlive_for_ctan("nope") is None
 
 

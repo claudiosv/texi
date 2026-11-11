@@ -23,6 +23,7 @@ An isolated workspace manager for LaTeX projects.
 | `texi tree` | Shows which files the last build actually read. |
 | `texi doctor` | Checks the TeX install and flags stale user-level formats. |
 | `texi formats` / `texi updmap` / `texi mktexlsr` / `texi luaotfload` / `texi update` | Rebuild formats, font maps, the `ls-R` filename databases (`--local` for `.texenv/` only) and the LuaTeX font database (`--force` for a full rebuild); update TeX Live. |
+| `texi tlpdb [stats\|search\|info]` | Inspects the TeX Live package database (downloaded and cached for 24 hours, or `--local` file). `stats` shows its URI, size and contents; `search QUERY...` finds packages (`--file` also searches file names, `--regex`, `--category`, `--exact`, `--limit`); `info NAME` (or a CTAN key) prints every field and file of a package (`--no-files`, `--all-files`, `--json`). |
 
 All commands accept `--debug` where it makes sense.
 

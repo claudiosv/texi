@@ -1,0 +1,78 @@
+{
+  "id": "pgf",
+  "name": "PGF",
+  "aliases": [
+    {
+      "id": "tikz",
+      "name": "TikZ"
+    }
+  ],
+  "caption": "Create PostScript and PDF graphics in TeX",
+  "authors": [
+    {
+      "id": "tantau",
+      "active": true
+    },
+    {
+      "id": "feuersaenger",
+      "active": true
+    },
+    {
+      "id": "pgf",
+      "active": true
+    },
+    {
+      "id": "menke",
+      "active": true
+    }
+  ],
+  "copyright": [],
+  "license": [
+    "gpl2",
+    "lppl1.3c",
+    "fdl"
+  ],
+  "version": {
+    "number": "3.1.12",
+    "date": ""
+  },
+  "descriptions": [
+    {
+      "language": null,
+      "text": "<p>PGF/TikZ.</p>"
+    }
+  ],
+  "documentation": [
+    {
+      "language": null,
+      "details": "Readme",
+      "href": "ctan:/graphics/pgf/base/README.md"
+    },
+    {
+      "language": null,
+      "details": "Minimal introduction to TikZ (unofficial)",
+      "href": "https://cremeronline.com/LaTeX/minimaltikz.pdf"
+    },
+    {
+      "language": null,
+      "details": "PGF Manual",
+      "href": "ctan:/graphics/pgf/base/doc/generic/pgf/pgfmanual.pdf"
+    }
+  ],
+  "support": "https://tug.org/mailman/listinfo/pgf-tikz",
+  "bugs": "https://github.com/pgf-tikz/pgf/issues",
+  "repository": "https://github.com/pgf-tikz/pgf",
+  "ctan": {
+    "path": "/graphics/pgf/base",
+    "file": true
+  },
+  "install": "/graphics/pgf/base/pgf.tds.zip",
+  "miktex": "pgf",
+  "texlive": "pgf",
+  "topics": [
+    "tagged-pdf-partially",
+    "graphics-in-tex",
+    "pgf-tikz",
+    "graphics"
+  ]
+}

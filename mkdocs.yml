@@ -52,8 +52,10 @@ nav:
   - API Reference:
       - Overview: api/index.md
       - pdffonts: api/pdffonts.md
+      - ctan: api/ctan.md
       - logparse: api/logparse.md
       - config: api/config.md
+      - tlpdb: api/tlpdb.md
   - Roadmap: roadmap.md
 
 plugins:

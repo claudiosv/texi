@@ -1,0 +1,65 @@
+{
+  "id": "amsmath",
+  "name": "AMS math",
+  "aliases": [],
+  "caption": "AMS mathematical facilities for LaTeX",
+  "authors": [
+    {
+      "id": "latex",
+      "active": true
+    }
+  ],
+  "copyright": [
+    {
+      "owner": "American Mathematical Society",
+      "year": "1995, 2000, 2013"
+    },
+    {
+      "owner": "LaTeX3 Project and American Mathematical Society",
+      "year": "2016-2025"
+    }
+  ],
+  "license": "lppl1.3c",
+  "version": {
+    "number": "2.17z",
+    "date": "2025-07-09"
+  },
+  "descriptions": [
+    {
+      "language": null,
+      "text": "<p>The principal package in the AMS-LaTeX distribution.</p>"
+    }
+  ],
+  "documentation": [
+    {
+      "language": null,
+      "details": "Implementation notes",
+      "href": "ctan:/macros/latex/required/amsmath/amsmath.pdf"
+    },
+    {
+      "language": null,
+      "details": "User guide",
+      "href": "ctan:/macros/latex/required/amsmath/amsldoc.pdf"
+    },
+    {
+      "language": "en",
+      "details": "General README",
+      "href": "ctan:/macros/latex/required/amsmath/README.md"
+    }
+  ],
+  "home": "https://www.ams.org/tex/amslatex.html",
+  "ctan": {
+    "path": "/macros/latex/required/amsmath",
+    "file": true
+  },
+  "install": "/macros/latex/required/latex-amsmath.tds.zip",
+  "miktex": "amsmath",
+  "texlive": "amsmath",
+  "topics": [
+    "maths",
+    "tagged-pdf-partially"
+  ],
+  "also": [
+    "nath"
+  ]
+}

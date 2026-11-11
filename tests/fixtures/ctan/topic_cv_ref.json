@@ -1,0 +1,11 @@
+{
+  "key": "cv",
+  "details": "curriculum vitae/Resumé",
+  "packages": [
+    "cv",
+    "cvsty",
+    "currvita",
+    "curve",
+    "ecv"
+  ]
+}

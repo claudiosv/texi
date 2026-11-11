@@ -1,0 +1,17 @@
+[
+  {
+    "key": "gpl",
+    "name": "GNU General Public License",
+    "free": true
+  },
+  {
+    "key": "gpl1",
+    "name": "GNU General Public License, version 1",
+    "free": true
+  },
+  {
+    "key": "gpl1+",
+    "name": "GNU General Public License, version 1 or newer",
+    "free": true
+  }
+]
