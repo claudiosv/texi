@@ -81,6 +81,35 @@ def read(env_dir: Path, arch: str | None = None) -> Graph:
     return g
 
 
+def contract(g: Graph, keep: set[str]) -> Graph:
+    """The graph of only the ``keep`` packages.
+
+    An edge ``a -> b`` is kept when ``a`` reaches ``b`` through packages that are
+    not in ``keep`` (or directly), so a dependency that runs through a package
+    you did not list still shows up as a link between two that you did.
+    """
+    out = Graph(revisions={n: r for n, r in g.revisions.items() if n in keep})
+    for n in out.revisions:
+        found: set[str] = set()
+        seen: set[str] = set()
+        todo = list(g.deps.get(n, []))
+        while todo:
+            d = todo.pop()
+            if d in seen or d == n:
+                continue
+            seen.add(d)
+            if d in keep:
+                found.add(d)
+            else:
+                todo += g.deps.get(d, [])
+        out.deps[n] = sorted(found)
+        for d in found:
+            out.dependents.setdefault(d, []).append(n)
+    for d in out.dependents:
+        out.dependents[d].sort()
+    return out
+
+
 def closure(g: Graph, roots: list[str]) -> set[str]:
     """The roots and everything they depend on."""
     seen: set[str] = set()

@@ -2,6 +2,7 @@ import asyncio
 import json
 import getpass
 import os
+import shlex
 import re
 import textwrap
 import shutil
@@ -29,7 +30,7 @@ from rich.markup import escape
 from rich.text import Text
 from rich.tree import Tree
 
-from texi import archive, deptree, logparse_bib, pdffonts, texenv, texfmt, tools
+from texi import archive, deptree, logparse_bib, lsr, pdffonts, texenv, texfmt, tools
 from texi import tlpdb as tlpdb_mod
 from texi.ctan import CtanClient
 from texi.logparse import (
@@ -809,7 +810,7 @@ def _usertree_packages(env_dir: Path) -> set[str]:
 def _activate_env(env_dir: Path) -> None:
     """Put .texenv/bin/<arch> first on PATH (standalone: also the TEXMF variables).
 
-    Every tool (latexmk, fmtutil, updmap, mktexlsr, luaotfload...) then resolves
+    Every tool (latexmk, fmtutil, updmap, luaotfload...) then resolves
     to the env's copy before the system one.
     """
     global latexmk_path
@@ -1153,12 +1154,10 @@ def _archive_install(
         notice=lambda m: console.print(f"[yellow]{escape(m)}[/yellow]"),
     )
     if result.installed:
-        if standalone:
-            _activate_env(env_dir)  # the tree's own mktexlsr, never the system's
-        _run([
-            "mktexlsr",
-            *map(str, archive.mktexlsr_targets(env_dir, standalone=standalone)),
-        ])
+        try:
+            lsr.write_all(archive.mktexlsr_targets(env_dir, standalone=standalone))
+        except lsr.LsrError as e:
+            console.print(f"[yellow]{escape(str(e))}[/yellow]")
         n = result.cached
         console.print(
             f"[green]✔ Cloned {n} {inflect_engine.plural('package', n)} from cache, "
@@ -2461,30 +2460,27 @@ def updmap(
 
 
 @app.command(
-    help="Rebuild TeX's file-name databases (ls-R). Use --local for just .texenv/.",
+    help="Rebuild TeX's file-name databases (ls-R) of .texenv/, or of the given directories.",
     rich_help_panel="TeX Live maintenance",
 )
 def mktexlsr(
-    local: bool = typer.Option(False, "--local", help="Only index .texenv/ (no sudo)."),
-    yes: bool = typer.Option(
-        False,
-        "--yes",
-        "-y",
-        help="Don't ask; use sudo if the TeX Live tree isn't writable.",
-    ),
+    dirs: Annotated[
+        list[Path] | None,
+        typer.Argument(help="Directories to index. Default: the trees of .texenv/."),
+    ] = None,
 ) -> None:
-    """Rebuild the ls-R filename databases (system via sudo by default)."""
-    sudo = False if local else _needs_sudo("mktexlsr", yes=yes)
+    """Write ls-R files with texi's own implementation (no mktexlsr program)."""
+    env_dir = Path.cwd() / ".texenv"
+    targets = dirs or archive.mktexlsr_targets(env_dir, standalone=_standalone(env_dir))
+    if not any(t.is_dir() for t in targets):
+        console.print("[red]Nothing to index. Run `texi sync` first.[/red]")
+        raise typer.Exit(code=1)
     try:
-        out = (
-            tools.mktexlsr(str(Path.cwd() / ".texenv"))
-            if local
-            else tools.mktexlsr(sudo=sudo)
-        )
-        console.print(escape(out))
-    except sh.ErrorReturnCode as e:
+        for path in lsr.write_all(targets):
+            console.print(f"[green]✔[/green] {escape(str(path))}")
+    except lsr.LsrError as e:
         console.print(f"[red]{escape(str(e))}[/red]")
-        raise typer.Exit(1) from e
+        raise typer.Exit(code=1) from e
 
 
 @app.command(
@@ -2603,6 +2599,14 @@ def tree(
             help="With --package: show the packages that depend on it instead.",
         ),
     ] = False,
+    project_only: Annotated[
+        bool,
+        typer.Option(
+            "--project-only/--no-project-only",
+            help="With --package --invert: only packages listed in texproject.toml "
+            "(links that run through other packages are kept).",
+        ),
+    ] = True,
     debug: DebugOpt = False,
 ) -> None:
     """List installed packages as a dependency tree."""
@@ -2616,6 +2620,7 @@ def tree(
         raise typer.Exit(code=1)
     config = load_project_config(Path.cwd() / "texproject.toml")
     g = deptree.read(env_dir, _target_arch(env_dir))
+    installed_count = len(g.revisions)
     only: set[str] | None = None
     if package is not None:
         if package not in g.revisions:
@@ -2630,6 +2635,9 @@ def tree(
         roots = g.roots()
     if explicit and package is None:
         only = deptree.closure(g, roots)
+    if invert and project_only:
+        listed = {d for d in config.dependencies if d in g.revisions}
+        g = deptree.contract(g, listed | {package})
     nodes = deptree.build(g, roots, depth=depth, invert=invert, only=only)
 
     def label(n: deptree.Node) -> str:
@@ -2646,7 +2654,8 @@ def tree(
             add(branch, c)
 
     heading = {
-        (True, True): f"packages that depend on {package}",
+        (True, True): f"packages that depend on {package}"
+        + (" (in texproject.toml)" if project_only else ""),
         (True, False): f"{package} and its dependencies",
     }.get((package is not None, invert), "explicit dependencies" if explicit else "installed packages")
     root_tree = Tree(f"[bold]{escape(heading)}[/bold]", guide_style="bright_blue")
@@ -2655,11 +2664,78 @@ def tree(
     console.print(root_tree)
     if any(_has_seen(n) for n in nodes):
         console.print("[dim](*) already shown above[/dim]")
-    outro(f"{len(g.revisions)} packages installed")
+    outro(f"{installed_count} packages installed")
 
 
 def _has_seen(n: deptree.Node) -> bool:
     return n.seen or any(_has_seen(c) for c in n.children)
+
+
+class ShellName(str, Enum):
+    BASH = "bash"
+    ZSH = "zsh"
+    SH = "sh"
+    FISH = "fish"
+
+
+def _shell_commands(
+    shell: ShellName, env_dir: Path, variables: dict[str, str], *, off: bool
+) -> str:
+    """Shell code that puts `env_dir`'s tools first on PATH (or takes them out again)."""
+    bin_dir = texenv.env_bin(env_dir)
+    root = str(env_dir.resolve())
+    bin_s = str(bin_dir.resolve()) if bin_dir else ""
+    # this process already has bin first (the callback activated it); the user's own PATH is the rest
+    others = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p and p != bin_s]
+    names = sorted(variables)
+    lines: list[str] = []
+    if shell is ShellName.FISH:
+        q = lambda v: "'" + v.replace("\\", "\\\\").replace("'", "\\'") + "'"  # noqa: E731
+        if off:
+            lines += [f"set -gx PATH {' '.join(q(p) for p in others)}"]
+            lines += [f"set -e {n}" for n in [*names, "TEXI_ENV"]]
+        else:
+            lines += [f"set -gx PATH {q(bin_s)} {' '.join(q(p) for p in others)}".rstrip()]
+            lines += [f"set -gx {n} {q(variables[n])}" for n in names]
+            lines += [f"set -e {n}" for n in texenv.SCRUBBED] if bin_dir else []
+            lines += [f"set -gx TEXI_ENV {q(root)}"]
+    else:
+        q = shlex.quote
+        if off:
+            lines += [f"export PATH={q(os.pathsep.join(others))}"]
+            lines += [f"unset {n}" for n in [*names, "TEXI_ENV"]]
+        else:
+            lines += [f"export PATH={q(os.pathsep.join([bin_s, *others]))}"]
+            lines += [f"export {n}={q(variables[n])}" for n in names]
+            lines += [f"unset {' '.join(texenv.SCRUBBED)}"] if bin_dir else []
+            lines += [f"export TEXI_ENV={q(root)}"]
+    return "\n".join(lines) + "\n"
+
+
+@app.command(
+    help='Print shell commands that put .texenv/ first, for: eval "$(texi activate)".',
+    rich_help_panel="Project",
+)
+def activate(
+    shell: Annotated[
+        ShellName | None,
+        typer.Option("--shell", help="Shell syntax. Default: from $SHELL (fish, else POSIX)."),
+    ] = None,
+    off: Annotated[
+        bool,
+        typer.Option("--off", help='Undo it: eval "$(texi activate --off)".'),
+    ] = False,
+) -> None:
+    """Print export lines only: stdout is meant to be eval'd, so nothing else goes there."""
+    env_dir = Path.cwd() / ".texenv"
+    if texenv.env_bin(env_dir) is None and not texenv.is_usertree(env_dir):
+        typer.echo("texi activate: no .texenv/ here. Run `texi sync`.", err=True)
+        raise typer.Exit(code=1)
+    if shell is None:
+        shell = ShellName.FISH if Path(os.environ.get("SHELL", "")).name == "fish" else ShellName.BASH
+    variables = _texenv_vars(env_dir)
+    variables.pop("PATH", None)
+    typer.echo(_shell_commands(shell, env_dir, variables, off=off), nl=False)
 
 
 _ORDER = [
@@ -2677,6 +2753,7 @@ _ORDER = [
     "export",
     "tree",
     "build_tree",
+    "activate",
     "doctor",
     "formats",
     "updmap",

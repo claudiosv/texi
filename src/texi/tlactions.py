@@ -59,11 +59,11 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from texi import texenv
+from texi import lsr, texenv
 
 #: Programs that a standalone tree must supply itself.
 TREE_TOOLS = frozenset(
-    {"mktexlsr", "updmap", "updmap-sys", "fmtutil", "fmtutil-sys", "kpsewhich", "texlua"}
+    {"updmap", "updmap-sys", "fmtutil", "fmtutil-sys", "kpsewhich", "texlua"}
 )
 
 #: ``--no-error-if-no-engine`` value (``TLConfig::PartialEngineSupport``).
@@ -834,11 +834,22 @@ def _run_scripts(ctx: _Run, batch: Batch) -> None:
             ctx.warn(f"postaction script {file} of {pkg} did not succeed")
 
 
-def _lsr_targets(root: Path, standalone: bool) -> list[str]:
+def _lsr_targets(root: Path, standalone: bool) -> list[Path]:
     """Trees that need an ``ls-R``: all ``!!`` entries of a standalone tree's search path."""
     if not standalone:
-        return [str(root)]
-    return [str(root / d) for d in ("texmf-dist", "texmf-var", "texmf-local")]
+        return [root]
+    return [root / d for d in ("texmf-dist", "texmf-var", "texmf-local")]
+
+
+def _index(ctx: _Run, trees: list[Path]) -> None:
+    """Write the ``ls-R`` files (texi's own ``mktexlsr``); failures become warnings."""
+    ctx.log("writing ls-R in " + ", ".join(map(str, trees)))
+    for tree in trees:
+        try:
+            if tree.is_dir():
+                lsr.write(tree)
+        except lsr.LsrError as e:
+            ctx.warn(str(e))
 
 
 def run(
@@ -853,7 +864,7 @@ def run(
     """Do the actions of a batch of installs and removals once (``handle_execute_actions``).
 
     Writes the configuration files from ``env_dir/tlpkg/texlive.tlpdb`` (so call
-    it after the tlpdb was written), runs ``mktexlsr``, ``updmap-user|sys`` and
+    it after the tlpdb was written), writes the ``ls-R`` files itself, runs ``updmap-user|sys`` and
     one ``fmtutil-user|sys``. Missing programs and failed builds are reported as
     warnings; nothing is raised for them.
 
@@ -898,12 +909,7 @@ def run(
         _update_formats_cnf(ctx, executes)
     select = _select_formats(ctx, batch, executes, language)
     if batch.maps or batch.formats or batch.hyphens or select:
-        ctx.run(
-            [
-                "mktexlsr",
-                *_lsr_targets(ctx.root, standalone),
-            ]
-        )
+        _index(ctx, _lsr_targets(ctx.root, standalone))
     if batch.maps:
         _run_updmap(ctx)
     if select:

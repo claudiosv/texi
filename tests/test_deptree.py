@@ -111,6 +111,22 @@ def test_cycles_terminate(env: Path) -> None:
     assert names(loop.children) == ["loop2"] and loop.children[0].children == []
 
 
+def test_contract_links_listed_packages_through_unlisted_ones(env: Path) -> None:
+    g = deptree.read(env, "universal-darwin")
+    c = deptree.contract(g, {"app", "core"})
+    assert c.deps["app"] == ["core"]  # app -> lib -> base -> core
+    (core,) = deptree.build(c, ["core"], invert=True)
+    assert names(core.children) == ["app"]
+
+
+def test_tree_invert_defaults_to_project_packages(project: Path) -> None:
+    r = runner.invoke(cli.app, ["tree", "-p", "core", "--invert"])
+    assert "in texproject.toml" in r.output
+    assert "lib r2" in r.output and "tool" not in r.output and "unrelated" not in r.output
+    r = runner.invoke(cli.app, ["tree", "-p", "core", "--invert", "--no-project-only"])
+    assert "tool r5" in r.output and "unrelated r4" in r.output
+
+
 def test_closure_for_explicit(env: Path) -> None:
     g = deptree.read(env, "universal-darwin")
     assert deptree.closure(g, ["lib"]) == {"lib", "base", "core"}
@@ -137,7 +153,7 @@ def test_tree_command_explicit_and_package(project: Path) -> None:
     r = runner.invoke(cli.app, ["tree", "--package", "app", "--depth", "1"])
     assert "app r3" in r.output and "lib r2" in r.output and "base" not in r.output
 
-    r = runner.invoke(cli.app, ["tree", "-p", "base", "--invert"])
+    r = runner.invoke(cli.app, ["tree", "-p", "base", "--invert", "--no-project-only"])
     assert "packages that depend on base" in r.output and "app r3" in r.output
 
 

@@ -31,12 +31,11 @@ Rebuild font maps (`updmap`). Run this after installing fonts.
 
 ## `texi mktexlsr`
 
-Rebuild TeX's file-name databases (`ls-R`).
+Rebuild TeX's file-name databases (`ls-R`) with texi's own implementation (the `mktexlsr` program is not used). Without arguments it indexes the search-path trees of `.texenv/`: `texmf-dist`, `texmf-var` and `texmf-local`. texi also does this itself after every install.
 
-| option | description |
+| argument | description |
 |---|---|
-| `--local` | Only index `.texenv/` (no sudo). |
-| `--yes`, `-y` | Don't ask; use sudo if the TeX Live tree isn't writable. |
+| `DIR...` | Index these directories instead. |
 
 ## `texi luaotfload`
 

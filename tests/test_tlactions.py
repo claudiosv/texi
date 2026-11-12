@@ -220,7 +220,8 @@ def test_addmap_writes_updmap_cfg_and_runs_updmap_once(tmp_path: Path, shims) ->
         calls[0][2]
         == f"TEXMFHOME={root} TEXMFVAR={root / 'texmf-var'} TEXMFCONFIG={root / 'texmf-config'}"
     )
-    assert len(shims.calls("mktexlsr")) == 1
+    assert shims.calls("mktexlsr") == []  # texi writes ls-R itself
+    assert (env / "ls-R").read_text().startswith("% ls-R -- filename database")
 
 
 def test_no_maps_no_updmap(tmp_path: Path, shims) -> None:
@@ -431,7 +432,7 @@ def test_standalone_binary_symlink_keeps_texmf_dist(tmp_path: Path, shims) -> No
     link = env / "bin" / ARCH / "tool"
     assert os.readlink(link) == "../../texmf-dist/scripts/tool/tool.pl"
     assert link.resolve() == (env / "texmf-dist/scripts/tool/tool.pl").resolve()
-    assert len(shims.calls("mktexlsr")) <= 1
+    assert shims.calls("mktexlsr") == []
 
 
 def test_foreign_arch_is_never_installed(tmp_path: Path) -> None:

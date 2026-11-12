@@ -21,9 +21,10 @@ An isolated workspace manager for LaTeX projects.
 | `texi fmt [files]` | Formats `.tex` files under `src_dir` with `tex-fmt`, using the settings in `[tex-fmt]`. `--check` only reports. |
 | `texi scan` | Lists the packages your sources use and their TeX Live packages. |
 | `texi build-tree` | Shows which files the last build actually read. |
+| `texi activate` | Prints shell code that puts `.texenv/` first: `eval "$(texi activate)"` (`--off` undoes it). |
 | `texi tree` | Shows the packages installed in `.texenv/` as a dependency tree (`--depth`, `--explicit`, `--package`, `--invert`). |
 | `texi doctor` | Checks the TeX install and flags stale user-level formats. |
-| `texi formats` / `texi updmap` / `texi mktexlsr` / `texi luaotfload` | Rebuild formats, font maps, the `ls-R` filename databases (`--local` for `.texenv/` only) and the LuaTeX font database (`--force` for a full rebuild). |
+| `texi formats` / `texi updmap` / `texi mktexlsr` / `texi luaotfload` | Rebuild formats, font maps, the `ls-R` filename databases (texi's own implementation, for `.texenv/`) and the LuaTeX font database (`--force` for a full rebuild). |
 | `texi update` / `texi outdated` | Fetch the latest package index and update the packages in `.texenv/` (same as `texi sync`) / list what would be updated without installing. |
 | `texi tlpdb [stats\|search\|info]` | Inspects the TeX Live package database (downloaded and cached for 24 hours, or `--local` file). `stats` shows its URI, size and contents; `search QUERY...` finds packages (`--file` also searches file names, `--regex`, `--category`, `--exact`, `--limit`); `info NAME` (or a CTAN key) prints every field and file of a package (`--no-files`, `--all-files`, `--json`). |
 

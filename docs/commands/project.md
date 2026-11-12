@@ -88,4 +88,22 @@ Show the packages installed in `.texenv/` as a dependency tree. By default the r
 | `--explicit` | Only the dependencies in `texproject.toml` and what they depend on. |
 | `--package`, `-p <name>` | Show only this package and its dependencies. |
 | `--invert`, `-i` | With `--package`: show the packages that depend on it instead. |
+| `--project-only` / `--no-project-only` | With `--package --invert` (default `--project-only`): list only packages that are in `texproject.toml`. A dependency that runs through an unlisted package is shown as a direct link between the two listed ones. |
 | `--debug` | Show every external command texi runs. |
+
+## `texi activate`
+
+Print shell commands that put `.texenv/` first, so `pdflatex`, `kpsewhich`, `latexmk` and the rest in your shell come from the project's tree:
+
+```sh
+eval "$(texi activate)"      # bash, zsh, sh
+texi activate --shell fish | source
+eval "$(texi activate --off)"   # undo
+```
+
+It sets `PATH` (the tree's `bin/<arch>` first), the `TEXMF*` variables that point only at `.texenv/`, and `TEXI_ENV`, and unsets the variables that would add outside trees (`TEXINPUTS`, `BIBINPUTS`, ...). Only shell code goes to stdout; errors go to stderr with exit code 1, so a failed `eval` does nothing.
+
+| option | description |
+|---|---|
+| `--shell <bash\|zsh\|sh\|fish>` | Shell syntax. Default: fish if `$SHELL` is fish, else POSIX. |
+| `--off` | Take `.texenv/` out of `PATH` and unset the variables. Variables that `activate` unset are not restored. |

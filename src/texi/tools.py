@@ -53,11 +53,6 @@ def updmap_user(*args: str) -> str:
     return str(_cmd("updmap-user")(*args))
 
 
-def mktexlsr(*dirs: str, sudo: bool = False) -> str:
-    """Rebuild ls-R filename databases (all texmf trees by default)."""
-    return _run_sys("mktexlsr", dirs, sudo)
-
-
 def luaotfload_update(*args: str) -> str:
     """Rebuild the LuaTeX font name database (`--update` by default)."""
     return str(_cmd("luaotfload-tool")(*(args or ("--update",))))
