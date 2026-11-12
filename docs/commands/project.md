@@ -127,3 +127,13 @@ The result has three parts:
 | used | everything else; a collection counts as used when it supplies a used package |
 
 A package whose file is shadowed by a copy in your project (for example `acmart.cls` in the project directory) is reported unused, because the build reads your copy. Nothing is removed for you.
+
+## `texi list`
+
+List the packages installed in `.texenv/` with their revision, one `name  rREVISION` per line, sorted by name. There is no banner, so the output can be piped. Binary halves (`name.<arch>`) are left out.
+
+| option | description |
+|---|---|
+| `--explicit` | Only the dependencies in `texproject.toml`. |
+
+`texi tree --depth 0` is not the same list: it shows only the packages that nothing else depends on.

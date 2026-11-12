@@ -20,7 +20,7 @@ import sqlite3
 import subprocess
 import urllib.error
 from collections import Counter
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -1317,8 +1317,29 @@ def has_cache(repository: str) -> bool:
     return any((cache_dir() / f"{key}.{ext}").is_file() for ext in ("sqlite", "xz"))
 
 
+def _read_body(
+    resp: Any, progress: Callable[[int, int], None] | None
+) -> bytes:
+    """Read a response, reporting ``(bytes_done, bytes_total)`` (total 0 if unknown)."""
+    if progress is None:
+        return resp.read()
+    total = int(resp.headers.get("Content-Length") or 0)
+    chunks: list[bytes] = []
+    done = 0
+    progress(0, total)
+    while chunk := resp.read(1 << 16):
+        chunks.append(chunk)
+        done += len(chunk)
+        progress(done, total)
+    return b"".join(chunks)
+
+
 def load_remote(
-    repository: str, *, refresh: bool = False, max_age: float = CACHE_MAX_AGE
+    repository: str,
+    *,
+    refresh: bool = False,
+    max_age: float = CACHE_MAX_AGE,
+    progress: Callable[[int, int], None] | None = None,
 ) -> Tlpdb:
     """Load ``<repository>/tlpkg/texlive.tlpdb.xz`` through the cache.
 
@@ -1403,7 +1424,7 @@ def load_remote(
 
     try:
         with urlopen(Request(url, headers=headers), timeout=TIMEOUT) as resp:
-            body = resp.read()
+            body = _read_body(resp, progress)
             final = resp.geturl() if hasattr(resp, "geturl") else url
             etag = resp.headers.get("ETag")
             last_mod = resp.headers.get("Last-Modified")
@@ -1450,7 +1471,7 @@ def load_remote(
             break
         try:
             with urlopen(Request(url, headers={"User-Agent": USER_AGENT}), timeout=TIMEOUT) as r2:
-                body2 = r2.read()
+                body2 = _read_body(r2, progress)
                 final2 = r2.geturl() if hasattr(r2, "geturl") else url
                 etag, last_mod = r2.headers.get("ETag"), r2.headers.get("Last-Modified")
             text2, comp2 = _decode(body2)
@@ -1486,6 +1507,7 @@ def load(
     *,
     local: Path | str | None = None,
     refresh: bool = False,
+    progress: Callable[[int, int], None] | None = None,
 ) -> Tlpdb:
     """Load a database from a repository URL or a local file.
 
@@ -1498,6 +1520,8 @@ def load(
         Local tlpdb file (plain or ``.xz``); takes precedence.
     refresh
         Ignore the cache age for remote repositories.
+    progress
+        Called with ``(bytes_done, bytes_total)`` while a remote index downloads.
     """
     if local is not None:
         return load_local(local)
@@ -1506,4 +1530,4 @@ def load(
     s = str(source)
     if not re.match(r"^(https?|file)://", s) and s.lower() not in ("ctan", "tlnet"):
         return load_local(s)
-    return load_remote(s, refresh=refresh)
+    return load_remote(s, refresh=refresh, progress=progress)

@@ -23,6 +23,7 @@ An isolated workspace manager for LaTeX projects.
 | `texi build-tree` | Shows which files the last build actually read. |
 | `texi unused` | Lists `texproject.toml` packages the last build and your sources do not use. |
 | `texi activate` | Prints shell code that puts `.texenv/` first: `eval "$(texi activate)"` (`--off` undoes it). |
+| `texi list` | Lists the packages installed in `.texenv/` with their revision. |
 | `texi tree` | Shows the packages installed in `.texenv/` as a dependency tree (`--depth`, `--explicit`, `--package`, `--invert`). |
 | `texi doctor` | Checks the TeX install and flags stale user-level formats. |
 | `texi formats` / `texi updmap` / `texi mktexlsr` / `texi luaotfload` | Rebuild formats, font maps, the `ls-R` filename databases (texi's own implementation, for `.texenv/`) and the LuaTeX font database (`--force` for a full rebuild). |

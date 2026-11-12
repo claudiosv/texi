@@ -891,3 +891,22 @@ def test_older_download_from_a_stale_mirror_is_not_kept(
     calls.clear()
     db = tl.load_remote("https://r.example/tlnet", refresh=True)
     assert not db.stale_mirror and db.revisions()["pkg"] == 210 and len(calls) == 2
+
+
+def test_remote_download_reports_progress(cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
+    import lzma
+
+    data = lzma.compress(b"name 00texlive.config\ncategory TLCore\nrevision 1\n" * 1)
+
+    class Resp(io.BytesIO):
+        headers = {"Content-Length": str(len(data))}
+
+        def geturl(self) -> str:
+            return "https://m.example/tlnet/tlpkg/texlive.tlpdb.xz"
+
+    monkeypatch.setattr(tl, "urlopen", lambda req, timeout=None: Resp(data))
+    seen: list[tuple[int, int]] = []
+    tl.load_remote("https://r.example/tlnet", refresh=True, progress=lambda d, t: seen.append((d, t)))
+    assert seen[0] == (0, len(data)) and seen[-1] == (len(data), len(data))
+    assert [d for d, _ in seen] == sorted(d for d, _ in seen)

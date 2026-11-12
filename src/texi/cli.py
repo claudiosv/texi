@@ -505,9 +505,16 @@ def _resolver_tlpdb(
             console.print("[dim]Building TeX Live package index…[/dim]")
         if refresh:
             console.print(
-                f"[blue]Fetching the latest package index from {escape(repo)}…[/blue]"
+                f"[blue]Fetching the latest package index from {escape(repo)}[/blue]"
             )
-            db = tlpdb_mod.load(repo, refresh=True)
+            with ShimmerProgress(console) as prog:
+                db = tlpdb_mod.load(
+                    repo,
+                    refresh=True,
+                    progress=lambda done, total: prog.on_progress(
+                        "Fetching the latest package index", done, total
+                    ),
+                )
             _report_index(console, db, repo)
         else:
             db = tlpdb_mod.load(repo)
@@ -2662,6 +2669,33 @@ def update(debug: DebugOpt = False) -> None:
 
 
 @app.command(
+    name="list",
+    help="List the packages installed in .texenv/ with their revision, one per line.",
+    rich_help_panel="Project",
+)
+def list_packages(
+    explicit: Annotated[
+        bool,
+        typer.Option("--explicit", help="Only the dependencies in texproject.toml."),
+    ] = False,
+    debug: DebugOpt = False,
+) -> None:
+    """Plain `name rREVISION` lines (no banner), so the output can be piped."""
+    env_dir = Path.cwd() / ".texenv"
+    if not (env_dir / "tlpkg" / "texlive.tlpdb").is_file():
+        typer.echo("texi list: no .texenv/ here. Run `texi sync`.", err=True)
+        raise typer.Exit(code=1)
+    g = deptree.read(env_dir, _target_arch(env_dir))
+    names = sorted(g.revisions)
+    if explicit:
+        wanted = set(load_project_config(Path.cwd() / "texproject.toml").dependencies)
+        names = [n for n in names if n in wanted]
+    width = max((len(n) for n in names), default=0)
+    for n in names:
+        typer.echo(f"{n:<{width}}  r{g.revisions[n]}")
+
+
+@app.command(
     help="Show the packages installed in .texenv/ and what depends on what, as a tree.",
     rich_help_panel="Project",
 )
@@ -2937,6 +2971,7 @@ _ORDER = [
     "fmt",
     "export",
     "unused",
+    "list_packages",
     "tree",
     "build_tree",
     "activate",

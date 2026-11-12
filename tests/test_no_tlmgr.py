@@ -462,7 +462,9 @@ def test_sync_says_where_the_index_comes_from(
     db.from_cache = False
     db.offline = False
 
-    def load(repo, refresh=False):
+    def load(repo, refresh=False, progress=None):
+        if progress:
+            progress(5, 10)
         return db
 
     monkeypatch.setattr(cli, "_resolver_tlpdb", _REAL_RESOLVER_TLPDB)

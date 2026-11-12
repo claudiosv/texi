@@ -166,3 +166,14 @@ def test_tree_command_errors(project: Path) -> None:
 def test_build_tree_is_the_old_tree_command() -> None:
     names = [c.name or c.callback.__name__ for c in cli.app.registered_commands]
     assert "build-tree" in names and "tree" in names
+
+
+def test_list_command_is_plain_and_filters(project: Path) -> None:
+    r = runner.invoke(cli.app, ["list"])
+    assert r.exit_code == 0, r.output
+    lines = r.output.splitlines()
+    assert lines[0].split() == ["app", "r3"]  # sorted, aligned, no banner
+    assert not any("universal-darwin" in l or "00texlive" in l for l in lines)
+    assert [l.split()[0] for l in lines] == sorted(l.split()[0] for l in lines)
+    r = runner.invoke(cli.app, ["list", "--explicit"])
+    assert [l.split() for l in r.output.splitlines()] == [["lib", "r2"]]
