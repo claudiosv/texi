@@ -1,30 +1,7 @@
 """Thin `sh` wrappers around the TeX Live maintenance tools."""
 
-import os
 
 import sh
-
-# In archive mode texi never runs tlmgr. The flag is set per command from the
-# project's install_method; TEXI_FORBID_TLMGR=1 forces it from the outside.
-_forbid_tlmgr = False
-
-
-def set_forbid_tlmgr(value: bool) -> None:
-    """Declare whether tlmgr must not run (archive mode)."""
-    global _forbid_tlmgr
-    _forbid_tlmgr = value
-
-
-def tlmgr_forbidden() -> bool:
-    """True in archive mode, or when TEXI_FORBID_TLMGR=1."""
-    return _forbid_tlmgr or os.environ.get("TEXI_FORBID_TLMGR") == "1"
-
-
-def assert_tlmgr_allowed() -> None:
-    """Raise AssertionError if tlmgr is forbidden; call before every implicit tlmgr use."""
-    if tlmgr_forbidden():
-        raise AssertionError("tlmgr called in archive mode")
-
 
 _ENGINE_FMT = {
     "pdflatex": ("pdftex", "pdflatex.fmt"),
@@ -84,11 +61,6 @@ def mktexlsr(*dirs: str, sudo: bool = False) -> str:
 def luaotfload_update(*args: str) -> str:
     """Rebuild the LuaTeX font name database (`--update` by default)."""
     return str(_cmd("luaotfload-tool")(*(args or ("--update",))))
-
-
-def tlmgr_update(*args: str, sudo: bool = True) -> str:
-    """`tlmgr update --self --all` by default; via sudo unless the tree is writable."""
-    return _run_sys("tlmgr", ("update", *(args or ("--self", "--all"))), sudo)
 
 
 def format_paths(engine: str = "pdflatex") -> list[str]:

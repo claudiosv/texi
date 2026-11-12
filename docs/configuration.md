@@ -26,13 +26,12 @@ bibtex_use = "always"
 |---|---|---|
 | `name` | none | Project name. Used as the latexmk `$jobname` (so the PDF is `<name>.pdf`) unless `build.jobname` is set. `texi init` sets it to the directory name. |
 | `main` | `"main.tex"` | The main `.tex` file, relative to `src_dir`. `build.default_files` overrides it (and allows several). |
-| `texlive_env` | `"usermode"` | How `.texenv/` is made. `usermode`: a tlmgr usertree layered over the system TeX Live. `copy`: a standalone tree copied from the system install (a minimal package set, own `tlpkg/texlive.tlpdb`; approach from [texenv](https://github.com/ricklyon/texenv)); `tlmgr` then installs into `.texenv/` only. `install`: a fresh `install-tl` (scheme minimal plus latex and latexmk) into `.texenv/`. |
 | `verify_checksums` | `true` | Check every downloaded package against the sha512 in the package index. Containers are first downloaded from the mirror the index came from (`mirror.ctan.org` picks a different mirror per request, and mirrors sync at different times); on a mismatch texi retries through the redirector, then fails and suggests pinning `repository`. Set `false` to only warn (`package hash mismatched … likely a stale mirror`) and install anyway; the file is then kept in the store under the sha512 it really has. |
-| `install_method` | `"archive"` | How packages get into `.texenv/`. `archive`: each package is downloaded once into a shared store (`~/.cache/texi/archive/`) and copy-on-write cloned into the project; see [texi sync](commands/project.md#texi-sync). `tlmgr`: `tlmgr install`. In archive mode texi never runs `tlmgr` and never writes to the system TeX Live: what the system tlpdb already lists is reused, everything else goes into `.texenv/`. `TEXI_FORBID_TLMGR=1` enforces the same ban in any mode. |
+| `install_method`, `texlive_env` | | Deprecated and ignored (`install_method` accepts only `"archive"`). `.texenv/` is always a standalone tree cloned from the archive store. |
 | `texlive` | none | Expected TeX Live year, e.g. `"2026"`. texi warns if the installed year differs. |
-| `repository` | none | tlmgr repository to install from, passed as `tlmgr --repository`. Point it at a frozen tlnet to really pin versions. |
+| `repository` | none | TeX Live repository (`tlnet`) to install from. Point it at a frozen tlnet to really pin versions. |
 | `src_dir` | `"src"` | Directory holding the `.tex` sources. The generated `.latexmkrc` sets `$do_cd = 1` and `@default_files`, so latexmk runs inside `src_dir`. Use `"."` for sources in the project root (then latexmk picks up `*.tex` itself). |
-| `dependencies` | `[]` | `tlmgr` package names installed into `.texenv/` by `texi sync` / `texi add`. |
+| `dependencies` | `[]` | TeX Live package names installed into `.texenv/` by `texi sync` / `texi add`. |
 
 When `src_dir` is not `"."`, the generated `.latexmkrc` stays at the project root and:
 

@@ -7,7 +7,6 @@ Create a `texproject.toml` for this project, filling in packages found in your `
 | option | description |
 |---|---|
 | `--force` | Replace an existing `texproject.toml`. |
-| `--texlive <usermode\|copy\|install>` | How to build `.texenv/` (default `usermode`). `usermode`: tlmgr usertree over the system TeX Live. `copy`: standalone tree copied from the system install. `install`: fresh `install-tl` installation. See `project.texlive_env` in the [configuration](../configuration.md). |
 | `--debug` | Show every external command texi runs, along with its output. |
 
 ## `texi add <pkg>...`
@@ -21,14 +20,14 @@ Add packages to `dependencies` and install them. A name that isn't a TeX Live pa
 
 ## `texi sync`
 
-Install every package listed in `dependencies` into `.texenv/`, then update them, and record the installed revisions in `texi.lock`.
+Fetch the latest package index (a conditional request; the cached copy is used when the repository is unreachable), install every package listed in `dependencies` into `.texenv/`, update those whose revision changed, and record the installed revisions in `texi.lock`.
 
 | option | description |
 |---|---|
-| `--no-update` | Install only; skip updating packages that are already installed. |
+| `--no-upgrade` | Install only: don't fetch a newer package index or update installed packages. |
 | `--debug` | Show every external command texi runs. |
 
-### Package store (`install_method = "archive"`, the default)
+### Package store
 
 Each package's runfiles container (`<repository>/archive/<name>.tar.xz`, verified against the sha512 in the tlpdb) is extracted once into a global store:
 
@@ -39,7 +38,7 @@ Each package's runfiles container (`<repository>/archive/<name>.tar.xz`, verifie
 
 `<ID>` is `<name>-<revision>-<first 7 characters of the container checksum>`, for example `kastrup-15878-d7cbd22`, so a new revision gets a new directory. `XDG_CACHE_HOME` is honored. Files are then cloned (copy-on-write on APFS, btrfs and XFS; a plain copy elsewhere, never a hard link) into `.texenv/` (`tex/latex/newtx/newtx.sty`; in `copy`/`install` trees under `texmf-dist/`), and recorded in `.texenv/tlpkg/texlive.tlpdb` and `tlpkg/tlpobj/` so `tlmgr`, `texi.lock` and `texi info` keep working. Dependencies are resolved as described under [Dependency resolution](#dependency-resolution). With updates enabled, a package whose index revision is newer is reinstalled from a new store entry.
 
-texi never runs `tlmgr` in this mode. The user tree skeleton (`tlpkg/texlive.tlpdb`, `tlpkg/tlpobj/`, `web2c/`, `texmf-var/`, `texmf-config/`) is written by texi itself, packages the system tlpdb lists as installed are not copied, and `latexmk` is installed into `.texenv/` when no `latexmk` is on `PATH`. `.texenv/bin/<arch>` is put first on `PATH` for every process texi starts and in the generated latexmkrc. Deleting `~/.cache/texi/archive/` is safe; there is no cleanup command yet.
+texi never runs `tlmgr`. The user tree skeleton (`tlpkg/texlive.tlpdb`, `tlpkg/tlpobj/`, `web2c/`, `texmf-var/`, `texmf-config/`) is written by texi itself, packages the system tlpdb lists as installed are not copied, and `latexmk` is installed into `.texenv/` when no `latexmk` is on `PATH`. `.texenv/bin/<arch>` is put first on `PATH` for every process texi starts and in the generated latexmkrc. Deleting `~/.cache/texi/archive/` is safe; there is no cleanup command yet.
 
 #### Install actions and binaries
 
@@ -60,13 +59,21 @@ texi resolves the `depend` closure itself, like TeX Live's `expand_dependencies`
 
 ## `texi scan`
 
-List the packages your source files use and their `tlmgr` dependencies, and flag any missing from `texproject.toml`.
+List the packages your source files use and their TeX Live packages, and flag any missing from `texproject.toml`.
 
 | option | description |
 |---|---|
-| `--resolve` / `--no-resolve` | Resolve names to tlmgr bundles (default: resolve). |
+| `--resolve` / `--no-resolve` | Resolve names to TeX Live packages (default: resolve). |
 | `--debug` | Show every external command texi runs. |
 
 ## `texi info`
 
 Show where texi keeps this project's local TeX tree and which tools it found.
+
+## `texi outdated`
+
+Fetch the latest package index and list the packages in `.texenv/` (and `tex-fmt`) that have a newer revision, as `name rOLD → rNEW`. Nothing is downloaded or installed. Run `texi sync` (or `texi update`) to apply the updates.
+
+## `texi update`
+
+The same as `texi sync`: fetch the latest index and update the packages of `.texenv/`. It never touches the system TeX Live.

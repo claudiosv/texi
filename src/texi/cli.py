@@ -1,5 +1,4 @@
 import asyncio
-import csv
 import json
 import getpass
 import os
@@ -12,11 +11,10 @@ import sys
 import time
 import tomllib
 from enum import Enum
-from collections.abc import Callable, Generator
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
 
-import httpx
 import inflect
 import sh
 import typer
@@ -89,7 +87,6 @@ DebugOpt = Annotated[
 @app.callback()
 def main(debug: DebugOpt = False) -> None:
     """LaTeX project workspace manager."""
-    _apply_install_method(_peek_project())
     _activate_env(Path.cwd() / ".texenv")
 
 
@@ -142,7 +139,7 @@ def _texenv_vars(env_dir: Path) -> dict[str, str]:
 
 
 def _updmap_local(env_dir: Path) -> None:
-    """Regenerate font maps for packages in .texenv/ (tlmgr usermode doesn't)."""
+    """Regenerate font maps for packages in .texenv/ (a usertree has no updmap-sys)."""
     if not shutil.which("updmap-user"):
         return
     env = os.environ | _texenv_vars(env_dir)
@@ -174,13 +171,7 @@ EXPLICIT_RC = True
 # Piping the rc needs /dev/stdin; elsewhere (Windows) it is always written to disk.
 PIPE_RC_SUPPORTED = sys.platform != "win32"
 
-tlmgr_path = shutil.which("tlmgr")
-TLMGR_REPOSITORY: str | None = None  # set from [project] repository
-
-
-def _no_tlmgr() -> bool:
-    """True in archive mode (and with TEXI_FORBID_TLMGR=1): texi must not run tlmgr."""
-    return tools.tlmgr_forbidden()
+PROJECT_REPOSITORY: str | None = None  # set from [project] repository
 
 
 def _peek_project() -> ProjectConfig | None:
@@ -192,31 +183,11 @@ def _peek_project() -> ProjectConfig | None:
         return None
 
 
-def _apply_install_method(project: ProjectConfig | None) -> None:
-    """Forbid tlmgr for archive projects, including when there is no texproject.toml yet."""
-    tools.set_forbid_tlmgr(project is None or project.install_method == "archive")
-
-
-def _tl() -> list[str]:
-    """tlmgr command head, honoring the project's `repository`."""
-    tools.assert_tlmgr_allowed()
-    return [
-        tlmgr_path,
-        *(["--repository", TLMGR_REPOSITORY] if TLMGR_REPOSITORY else []),
-    ]
-
-
 latexmk_path = shutil.which("latexmk")
 texfmt_path = shutil.which("tex-fmt")
 inflect_engine = inflect.engine()
 
 # --- Core Logic ---
-
-
-class TexliveMode(str, Enum):
-    USERMODE = "usermode"
-    COPY = "copy"
-    INSTALL = "install"
 
 
 def load_project_config(config_path: Path) -> TexProjectConfig:
@@ -468,200 +439,6 @@ def generate_latexmkrc(config: TexProjectConfig, rc_path: Path) -> None:
     rc_path.write_text(render_latexmkrc(config), encoding="utf-8")
 
 
-def _tlmgr_info(*cmd_input: list[str]) -> subprocess.CompletedProcess:
-    """Runs tlmgr info with the given input and returns the completed process."""
-    tools.assert_tlmgr_allowed()
-    cmd: list[str] = [
-        *_tl(),
-        "info",
-        *cmd_input,
-    ]
-    return _run(cmd)
-
-
-def _parse_tlmgr_info_output(
-    result: subprocess.CompletedProcess, fields: list[str]
-) -> Generator[dict[str, Any | str] | dict[str, Any], Any, None]:
-    expected_seperators = len(fields) - 1
-    output_lines = result.stdout.splitlines() + result.stderr.splitlines()
-    for line in output_lines:
-        # trailer tlmgr prints on stderr whenever any requested package is missing
-        if line.startswith((
-            "tlmgr: action info returned an error",
-            "tlmgr: An error has occurred",
-        )):
-            continue
-        if "not found neither locally nor remote" in line:
-            parts = line.split()
-            if len(parts) >= 3:
-                pkg_name = parts[2]
-                yield {
-                    "name": pkg_name,
-                    "status": "missing",
-                }
-        elif "not locally!" in line:  # tlmgr: package acmart not locally!
-            parts = line.split()
-            if len(parts) >= 3:
-                pkg_name = parts[2]
-                yield {"name": pkg_name, "status": "not_locally"}
-        elif (
-            line.count(",") == expected_seperators
-        ):  # Expecting lines like "pkgname,installed,relocatable,size"
-            parts = line.strip().split(",")
-            if len(parts) != len(fields):
-                yield {
-                    "status": "unexpected",
-                    "line": line,
-                    "error": f"Expected {len(fields)} fields but got {len(parts)}",
-                }
-                continue
-            parsed_fields = dict(zip(fields, parts, strict=True))
-            if "installed" in parsed_fields:
-                parsed_fields["installed"] = parsed_fields["installed"] == "1"
-            if "relocatable" in parsed_fields:
-                parsed_fields["relocatable"] = parsed_fields["relocatable"] == "1"
-            yield parsed_fields | {"status": "found"}
-
-        else:
-            yield {"status": "unexpected", "line": line}
-
-
-def _get_tlmgr_info_output(
-    *cmd_input: list[str], data_fields: list[str], env_dir: Path
-) -> Generator[dict[str, Any | str] | dict[str, Any], Any, None]:
-    tlmgr_result = _tlmgr_info(
-        *([] if _standalone(env_dir) else ["--usertree", str(env_dir)]),
-        "--data",
-        ",".join(data_fields),
-        *cmd_input,
-    )
-    return _parse_tlmgr_info_output(tlmgr_result, data_fields)
-
-
-def _usertree_packages(env_dir: Path) -> set[str]:
-    """Names of packages recorded in the .texenv tlpdb."""
-    tlpdb = env_dir / "tlpkg" / "texlive.tlpdb"
-    if not tlpdb.exists():
-        return set()
-    return {
-        line[5:].strip()
-        for line in tlpdb.read_text().splitlines()
-        if line.startswith("name ")
-    }
-
-
-def filter_packages(
-    packages: list[str],
-    env_dir: Path,
-    prog: ShimmerProgress,
-) -> tuple[list[str], list[str], list[str]]:
-    """
-    Queries tlmgr via JSON to categorize packages into valid (to install),
-    skipped (system binaries), and already installed.
-    """
-    if not packages:
-        return [], [], []
-
-    packages = list(set(packages))  # Deduplicate
-    done = 0
-
-    def advance() -> None:
-        nonlocal done
-        done += 1
-        prog.on_progress("Fetching metadata", done, len(packages))
-
-    prog.on_progress("Fetching metadata", 0, len(packages))
-    installable_local_packages: list[str] = []
-    installable_system_packages: list[str] = []
-    already_installed: list[str] = []
-    remote_packages: list[str] = []
-    missing_packages: list[str] = []
-
-    data_fields = ["name", "installed", "relocatable"]
-
-    # TODO: should the "--usermode" flag be included?
-    installed_result = _get_tlmgr_info_output(
-        "--only-installed", *packages, data_fields=data_fields, env_dir=env_dir
-    )
-    for result in installed_result:
-        if result["status"] == "found":
-            if result["installed"]:
-                already_installed.append(result["name"])
-            elif not result["installed"] and result["relocatable"]:
-                installable_local_packages.append(result["name"])
-            elif not result["installed"] and not result["relocatable"]:
-                installable_system_packages.append(result["name"])
-            advance()
-        elif result["status"] == "missing":
-            console.print(
-                f"[yellow]Warning: Package '{result['name']}' is not available in the current TeX Live repository.[/yellow]"
-            )
-            missing_packages.append(result["name"])
-            advance()
-        elif result["status"] == "not_locally":
-            remote_packages.append(result["name"])
-            advance()
-        elif result["status"] == "unexpected":
-            console.print(
-                f"[red]Unexpected output from tlmgr info: {result.get('line', '')}[/red]"
-            )
-
-    remaining_packages = list(set(missing_packages + remote_packages))
-
-    # With no package args, `tlmgr info` lists *every* package, so never call it empty.
-    remote_result = (
-        _get_tlmgr_info_output(
-            "--only-remote",
-            *remaining_packages,
-            data_fields=data_fields,
-            env_dir=env_dir,
-        )
-        if remaining_packages
-        else iter(())
-    )
-    for result in remote_result:
-        if result["status"] == "found":
-            if result["installed"]:
-                already_installed.append(result["name"])
-            elif not result["installed"] and result["relocatable"]:
-                installable_local_packages.append(result["name"])
-            elif not result["installed"] and not result["relocatable"]:
-                installable_system_packages.append(result["name"])
-            advance()
-        elif result["status"] == "missing":
-            console.print(
-                f"[yellow]Warning: Package '{result['name']}' is not available in the current TeX Live repository.[/yellow]"
-            )
-            missing_packages.append(result["name"])
-            advance()
-        elif result["status"] == "not_locally":
-            remote_packages.append(result["name"])
-            advance()
-        elif result["status"] == "unexpected":
-            console.print(
-                f"[red]Unexpected output from tlmgr info: {result.get('line', '')}[/red]"
-            )
-
-    # `tlmgr info` only sees the system tree; packages already in .texenv count as installed.
-    in_usertree = _usertree_packages(env_dir)
-    already_installed += [p for p in installable_local_packages if p in in_usertree]
-    installable_local_packages = [
-        p for p in set(installable_local_packages) if p not in in_usertree
-    ]
-    if _standalone(env_dir):  # one tree: nothing is "system" or non-relocatable
-        installable_local_packages += [
-            p for p in installable_system_packages if p not in in_usertree
-        ]
-        already_installed += [
-            p for p in installable_system_packages if p in in_usertree
-        ]
-        installable_system_packages = []
-    installable_system_packages = list(set(installable_system_packages))
-    already_installed = list(set(already_installed))
-
-    return installable_local_packages, installable_system_packages, already_installed
-
-
 def sty_cache_path() -> Path:
     """Location of the persistent .sty -> bundle name lookup cache."""
     cache_home = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
@@ -696,60 +473,6 @@ def find_texlive_for_ctan(name: str) -> list[str] | None:
         return client.find_texlive(name)
 
 
-def _search_bundles_tlmgr(
-    sty_name: str, console: Console, exts: tuple[str, ...]
-) -> list[str]:
-    """Ask `tlmgr search --file` which packages ship the exact file {sty_name}{ext}."""
-    tools.assert_tlmgr_allowed()
-    cmd: list[str] = [
-        "tlmgr",
-        "search",
-        sty_name,
-        "--json",
-        "--word",
-        "--global",
-        "--file",
-    ]
-
-    try:
-        # We drop check=True so we can handle tlmgr's exit codes manually if needed,
-        # but here we just want to suppress outright crashes.
-        result = _run(cmd)
-        # if result.returncode != 0 and not result.stdout.strip():
-        #     return []
-        # console.print(f"[dim]tlmgr search output: {result.stdout}[/dim]")
-        output = result.stdout.strip()
-
-        if not output.startswith("{"):
-            # Find the index of the first opening curly brace
-            start_index = output.find("{")
-
-            if start_index != -1:
-                # Slice the string from the first '{' to the end
-                output = output[start_index:]
-        data = json.loads(output)
-    except subprocess.CalledProcessError, json.JSONDecodeError:
-        console.print_exception()
-        console.print(output)
-        return []
-
-    matched_bundles: list[str] = []
-
-    # We look for paths ending in /name.sty to avoid false positives
-    # classes (.cls) are packages too, e.g. \\documentclass{acmart}
-    suffixes = tuple(f"{sty_name}{e}" for e in exts)
-
-    files_dict: dict[str, list[str]] = data.get("files", {})
-
-    for bundle_name, file_paths in files_dict.items():
-        for path in file_paths:
-            if path.rpartition("/")[2] in suffixes:
-                matched_bundles.append(bundle_name)
-                break  # Found it in this bundle, skip remaining files in this bundle
-
-    return matched_bundles
-
-
 _TLPDB_UNSET: Any = object()
 _tlpdb_memo: Any = _TLPDB_UNSET
 
@@ -760,21 +483,30 @@ def _reset_tlpdb_memo() -> None:
     _tlpdb_memo = _TLPDB_UNSET
 
 
-def _resolver_tlpdb(console: Console) -> tlpdb_mod.Tlpdb | None:
+def _resolver_tlpdb(
+    console: Console, refresh: bool = False
+) -> tlpdb_mod.Tlpdb | None:
     """The TeX Live package index for name lookups, loaded once per process.
 
     Uses the cached index (building it from a download when there is none yet).
-    None when it cannot be loaded; callers then fall back to tlmgr and CTAN.
+    With `refresh` it asks the repository for a newer one (a conditional request,
+    so an unchanged index costs almost nothing) and falls back to the cache when
+    the repository cannot be reached.
+    None when it cannot be loaded; callers then fall back to CTAN.
     """
     global _tlpdb_memo
-    if _tlpdb_memo is not _TLPDB_UNSET:
+    if _tlpdb_memo is not _TLPDB_UNSET and not refresh:
         return _tlpdb_memo
     db: tlpdb_mod.Tlpdb | None = None
     try:
         repo, _ = tlpdb_mod.resolve_repository(None, None)
         if not tlpdb_mod.has_cache(repo):
             console.print("[dim]Building TeX Live package index…[/dim]")
-        db = tlpdb_mod.load(repo)
+        db = tlpdb_mod.load(repo, refresh=True) if refresh else tlpdb_mod.load(repo)
+        if refresh and db is not None and getattr(db, "offline", False):
+            console.print(
+                "[yellow]Could not reach the repository; using the cached package index.[/yellow]"
+            )
     except (tlpdb_mod.TlpdbError, OSError, sqlite3.Error) as e:
         if DEBUG:
             console.print(f"[dim]tlpdb index unavailable: {escape(str(e))}[/dim]")
@@ -813,8 +545,7 @@ def find_bundle_for_sty(
     {sty_name} (binhex -> kastrup). Collections and schemes are ignored. A
     package called exactly {sty_name} wins, then one whose catalogue key is it,
     then a single candidate; otherwise all candidates are returned. If the
-    index is unavailable or knows nothing, `tlmgr search --file` is the
-    fallback; with several candidates CTAN is asked and its `texlive` field
+    index is unavailable or knows nothing, or has several candidates, CTAN is asked and its `texlive` field
     settles the choice when it is one of them, otherwise all candidates are
     returned for the caller to choose from. With no candidates, CTAN is the
     last resort.
@@ -837,8 +568,8 @@ def find_bundle_for_sty(
                 cache[sty_name] = found
             return found
 
-    # archive mode never runs tlmgr: the index, then CTAN
-    bundles = [] if _no_tlmgr() else _search_bundles_tlmgr(sty_name, console, exts)
+    # the index, then CTAN
+    bundles: list[str] = []
     ctan: list[str] | None = None
     settled = len(bundles) == 1
     if not settled:  # none or ambiguous: CTAN knows the TeX Live name
@@ -847,8 +578,7 @@ def find_bundle_for_sty(
             exact = [b for b in bundles if b in ctan]
             bundles = exact or ([] if bundles else ctan) or bundles
     if DEBUG:
-        via = "CTAN" if _no_tlmgr() else "tlmgr/CTAN"
-        console.print(f"[dim]{escape(sty_name)}: {via} fallback[/dim]")
+        console.print(f"[dim]{escape(sty_name)}: CTAN fallback[/dim]")
     answered = settled or ctan is not None  # an unanswered CTAN query is not remembered
     if cache is not None and answered and (bundles or consulted):
         cache[sty_name] = bundles
@@ -903,14 +633,7 @@ def resolve_dependencies(
     console: Console,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> list[str]:
-    r"""Resolves raw \usepackage names to tlmgr bundle names, using a persistent cache."""
-    if tlmgr_path is None and not _no_tlmgr():
-        console.print(
-            "[yellow]Warning: tlmgr not found; using raw package names as dependencies. "
-            "They may need manual correction for `texi sync` to work.[/yellow]"
-        )
-        return sorted(set(packages))
-
+    r"""Resolves raw \usepackage names to TeX Live package names, using a persistent cache."""
     cache = load_sty_cache()
     dependencies: set[str] = set()
 
@@ -934,7 +657,7 @@ def resolve_dependencies(
 )
 def scan(
     resolve: bool = typer.Option(
-        True, "--resolve/--no-resolve", help="Resolve names to tlmgr bundles."
+        True, "--resolve/--no-resolve", help="Resolve names to TeX Live packages."
     ),
     debug: DebugOpt = False,
 ) -> None:
@@ -952,10 +675,10 @@ def scan(
                 packages,
                 console,
                 lambda done, total: prog.on_progress(
-                    "Resolving to tlmgr dependencies", done, total
+                    "Resolving to TeX Live packages", done, total
                 ),
             )
-        _note(title="tlmgr dependencies", content=[escape(", ".join(deps))])
+        _note(title="TeX Live packages", content=[escape(", ".join(deps))])
         config_path = Path.cwd() / "texproject.toml"
         if config_path.exists():
             declared = set(load_project_config(config_path).dependencies)
@@ -985,15 +708,6 @@ def init(
     force: bool = typer.Option(
         False, "--force", help="Replace an existing texproject.toml."
     ),
-    texlive: Annotated[
-        TexliveMode,
-        typer.Option(
-            "--texlive",
-            help="How to build .texenv/: usermode (tlmgr usertree over the system TeX Live), "
-            "copy (standalone tree copied from the system install), "
-            "install (fresh install-tl installation).",
-        ),
-    ] = TexliveMode.USERMODE,
     debug: DebugOpt = False,
 ) -> None:
     """Creates a texproject.toml, scanning any .tex files for package dependencies."""
@@ -1023,7 +737,7 @@ def init(
                 packages,
                 console,
                 lambda done, total: prog.on_progress(
-                    "Resolving to tlmgr dependencies", done, total
+                    "Resolving to TeX Live packages", done, total
                 ),
             )
     else:
@@ -1038,7 +752,7 @@ def init(
     try:
         config = TexProjectConfig(
             project=ProjectConfig(
-                name=cwd.name, dependencies=dependencies, texlive_env=texlive.value
+                name=cwd.name, dependencies=dependencies
             )
         )
     except ValidationError as e:
@@ -1051,8 +765,6 @@ def init(
         f'name = "{config.name}"',
         f'src_dir = "{config.src_dir}"',
         f'main = "{config.project.main}"',
-        f'texlive_env = "{config.project.texlive_env}"',
-        f'install_method = "{config.project.install_method}"',
         "",
         "dependencies = [",
     ]
@@ -1060,7 +772,7 @@ def init(
     lines.append("]")
     lines.append("")
     config_path.write_text("\n".join(lines), encoding="utf-8")
-    _create_env(texlive.value, config.project.repository)
+    _create_env(config.project.repository)
 
     outro(
         f"[green]✔ Created {config_path.name} with {len(dependencies)} dependencies.[/green]"
@@ -1082,13 +794,25 @@ def _standalone(env_dir: Path) -> bool:
     return texenv.env_bin(env_dir) is not None or (env_dir / "texmf-local").is_dir()
 
 
+def _usertree_packages(env_dir: Path) -> set[str]:
+    """Names of packages recorded in the .texenv tlpdb."""
+    tlpdb = env_dir / "tlpkg" / "texlive.tlpdb"
+    if not tlpdb.exists():
+        return set()
+    return {
+        line[5:].strip()
+        for line in tlpdb.read_text().splitlines()
+        if line.startswith("name ")
+    }
+
+
 def _activate_env(env_dir: Path) -> None:
     """Put .texenv/bin/<arch> first on PATH (standalone: also the TEXMF variables).
 
     Every tool (latexmk, fmtutil, updmap, mktexlsr, luaotfload...) then resolves
     to the env's copy before the system one.
     """
-    global tlmgr_path, latexmk_path
+    global latexmk_path
     if not (bin_dir := texenv.env_bin(env_dir)):
         return
     if _standalone(env_dir):
@@ -1098,7 +822,6 @@ def _activate_env(env_dir: Path) -> None:
     paths = os.environ.get("PATH", "").split(os.pathsep)
     if paths[0] != str(bin_dir):
         os.environ["PATH"] = os.pathsep.join([str(bin_dir), *paths])
-    tlmgr_path = shutil.which("tlmgr")
     latexmk_path = shutil.which("latexmk")
 
 
@@ -1119,103 +842,50 @@ def _clone_env_tree(repository: str | None) -> None:
             infrastructure=True,
         )
     _report_failed(result, "packages")  # exits 1; the next `texi sync` resumes
-    _install_tex_fmt(env_dir)
+    _install_tex_fmt(env_dir, update=False)
     (env_dir / texenv.CLONE_DONE).write_text("ok\n", encoding="utf-8")
     _activate_env(env_dir)
     console.print("[green]✔ Created .texenv/[/green]")
 
 
-def _install_tex_fmt(env_dir: Path) -> Path | None:
-    """tex-fmt from CTAN (`latex-formatter`) into the tree; a failure only warns."""
+def _install_tex_fmt(env_dir: Path, update: bool = True) -> Path | None:
+    """tex-fmt from CTAN (`latex-formatter`) into the tree, updated to CTAN's latest version.
+
+    A failure only warns. With `update` false an existing tex-fmt is kept without a request.
+    """
     if not _standalone(env_dir):
         return None
     return texfmt.ensure(
         env_dir,
         _target_arch(env_dir),
         notice=lambda m: console.print(f"[yellow]{escape(m)}[/yellow]"),
+        update=update,
     )
 
 
-def _create_env(
-    mode: str, repository: str | None = None, method: str = "tlmgr"
-) -> None:
-    """Create a standalone .texenv/ (no-op for a usertree or if it exists).
-
-    ``method = "archive"`` clones the whole tree from the store, whatever `mode` says.
-    Otherwise mode copy/install copies the system tree or runs install-tl.
-    """
+def _create_env(repository: str | None = None) -> None:
+    """Create the standalone .texenv/ from the archive store (no-op if it exists)."""
     env_dir = Path.cwd() / ".texenv"
-    if method == "archive":
-        if texenv.is_usertree(env_dir):
-            return  # an existing usertree stays one; delete .texenv/ to rebuild it
-        if (env_dir / texenv.CLONE_DONE).exists():
-            return
-        _clone_env_tree(repository)  # new, or an earlier run did not finish
+    if texenv.is_usertree(env_dir):
+        return  # an existing usertree stays one; delete .texenv/ to rebuild it
+    if (env_dir / texenv.CLONE_DONE).exists():
         return
-    if mode == "usermode" or _standalone(env_dir):
-        return
-    if mode == "copy":
-        root = _run(["kpsewhich", "-var-value=TEXMFROOT"]).stdout.strip()
-        if not root:
-            console.print("[red]No system TeX Live found to copy from.[/red]")
-            raise typer.Exit(code=1)
-        console.print(f"[blue]Copying minimal package set from {root}...[/blue]")
-        texenv.create_env(env_dir, Path(root))
-    else:
-        console.print(
-            "[blue]Installing TeX Live into .texenv/ (this takes a while)...[/blue]"
-        )
-        try:
-            texenv.install_env(env_dir, repository, tlmgr=not _no_tlmgr())
-        except (OSError, httpx.HTTPError, subprocess.CalledProcessError) as e:
-            console.print(f"[red]install-tl failed: {escape(str(e))}[/red]")
-            raise typer.Exit(code=1) from e
-    _activate_env(env_dir)
-    if mode == "install" and _no_tlmgr():
-        # scheme-minimal has no LaTeX: add the core and latexmk from the archive store
-        with ShimmerProgress(console) as prog:
-            _archive_install(
-                prog, repository, env_dir, standalone=True, roots=["latex", "latexmk"], update=False
-            )
-        _activate_env(env_dir)
-    if mode == "copy":  # the copied ls-R lists system files; rebuild it for this tree
-        _run(["mktexlsr", str(env_dir / "texmf-dist")])
-        # the copied configs list every system language/map; keep only what the env has
-        if not _no_tlmgr():
-            _run([*_tl(), "generate", "language"])
-        subprocess.run(  # asks "Do you really want to continue (y/N)?" before editing updmap.cfg
-            ["updmap-sys", "--syncwithtrees"],
-            input="y\n",
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    console.print("[green]✔ Created .texenv/[/green]")
+    _clone_env_tree(repository)  # new, or an earlier run did not finish
 
 
 def _texlive_year(env_dir: Path) -> str | None:
-    """Release year of the TeX Live in use.
-
-    Archive mode reads it from the tlpdb (the env's own for a standalone tree,
-    else the system's); tlmgr projects ask `tlmgr --version`.
-    """
-    if _no_tlmgr():
-        own = env_dir / "tlpkg" / "texlive.tlpdb"
-        if _standalone(env_dir) and own.is_file():
-            return tlpdb_mod.read_system_tlpdb(own).release
-        info = tlpdb_mod.load_local_installed()
-        return info.release if info else None
-    if not tlmgr_path:
-        return None
-    m = re.search(r"version (\d{4})", _run([tlmgr_path, "--version"]).stdout)
-    return m.group(1) if m else None
+    """Release year of the TeX Live in use: from the env's own tlpdb, else the system's."""
+    own = env_dir / "tlpkg" / "texlive.tlpdb"
+    if _standalone(env_dir) and own.is_file():
+        return tlpdb_mod.read_system_tlpdb(own).release
+    info = tlpdb_mod.load_local_installed()
+    return info.release if info else None
 
 
-def _apply_project_tlmgr(config: TexProjectConfig) -> None:
-    """Apply [project] repository / texlive: tlmgr source and a year sanity check."""
-    global TLMGR_REPOSITORY
-    _apply_install_method(config.project)
-    TLMGR_REPOSITORY = config.project.repository
+def _apply_project(config: TexProjectConfig) -> None:
+    """Apply [project] repository / texlive: the repository for texi.lock and a year sanity check."""
+    global PROJECT_REPOSITORY
+    PROJECT_REPOSITORY = config.project.repository
     if config.project.texlive and (year := _texlive_year(Path.cwd() / ".texenv")):
         if year != config.project.texlive:
             console.print(
@@ -1236,15 +906,10 @@ def _package_revisions(env_dir: Path, names: list[str]) -> dict[str, int]:
             elif line.startswith("revision ") and name in names:
                 revs[name] = int(line[9:])
     rest = [n for n in names if n not in revs]
-    if rest and _no_tlmgr():
+    if rest:
         info = tlpdb_mod.load_local_installed()
         if info:
             revs |= {n: info.revisions[n] for n in rest if n in info.revisions}
-    elif rest and tlmgr_path:
-        for line in _tlmgr_info("--data", "name,localrev", *rest).stdout.splitlines():
-            n, _, rev = line.partition(",")
-            if n in rest and rev.strip().isdigit():
-                revs[n] = int(rev)
     return revs
 
 
@@ -1262,8 +927,8 @@ def _write_lock(path: Path, revs: dict[str, int]) -> None:
         "# Generated by `texi sync`. Commit this file to record resolved package revisions.",
         f'texlive = "{year}"' if year else "",
     ]
-    if TLMGR_REPOSITORY:
-        lines.append(f"repository = {json.dumps(TLMGR_REPOSITORY)}")
+    if PROJECT_REPOSITORY:
+        lines.append(f"repository = {json.dumps(PROJECT_REPOSITORY)}")
     lines += ["", "[packages]"]
     for name, rev in sorted(revs.items()):
         key = name if re.fullmatch(r"[A-Za-z0-9_-]+", name) else json.dumps(name)
@@ -1273,8 +938,6 @@ def _write_lock(path: Path, revs: dict[str, int]) -> None:
 
 def _update_lock(cwd: Path, installed: set[str], keep: list[str]) -> None:
     """Record installed revisions in texi.lock and report what changed since last time."""
-    if not tlmgr_path and not _no_tlmgr():
-        return
     path = cwd / LOCK_NAME
     old = _read_lock(path)
     new = {n: r for n, r in old.items() if n in keep}
@@ -1288,40 +951,6 @@ def _update_lock(cwd: Path, installed: set[str], keep: list[str]) -> None:
     if changes:
         _note(title=f"{LOCK_NAME} changes", content=[escape(c) for c in changes])
     console.print(f"[dim]Wrote {LOCK_NAME} ({len(new)} packages)[/dim]")
-
-
-def _install(prog: ShimmerProgress, phase: str, cmd: list[str]) -> None:
-    """Run `tlmgr install --machine-readable`, feeding byte counts to the progress bar."""
-    _debug_cmd(cmd)
-    process = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-    )
-    done = total = 0
-    post_install = False
-    prog.on_progress(phase)
-    for line in process.stdout:
-        if DEBUG:
-            console.print(f"[dim]{escape(line.rstrip())}[/dim]")
-        stripped = line.strip()
-        if stripped.startswith("total-bytes"):
-            parts = stripped.split("\t")
-            if len(parts) >= 2:
-                total = int(parts[1])
-                prog.on_progress(phase, done, total)
-        elif "is not relocatable, cannot install it in user mode!" in stripped:
-            parts = stripped.split()
-            if len(parts) >= 3:
-                console.print(
-                    f"[yellow]Warning: Package '{parts[2]}' is not relocatable and "
-                    "cannot be installed in user mode. Skipping.[/yellow]"
-                )
-        elif stripped == "end-of-updates":
-            post_install = True
-            prog.on_progress("Running post-installation scripts")
-        elif not post_install and stripped.count("\t") == 9:
-            done += int(stripped.split("\t")[4])
-            prog.on_progress(phase, done, total)
-    process.wait()
 
 
 def _tl_target() -> Path | None:
@@ -1343,23 +972,10 @@ def _chown_tl(target: Path) -> None:
         raise typer.Exit(code=1)
 
 
-def _ensure_tl_writable() -> None:
-    """tlmgr needs a writable TeX Live tree; offer to chown it to the current user."""
-    if (target := _tl_target()) is None:
-        return
-    if not _confirm(
-        f"{target} is not writable, so tlmgr can't install packages. "
-        f"Run `sudo chown -R {getpass.getuser()} {target}`?",
-        default=True,
-    ):
-        raise typer.Exit(code=1)
-    _chown_tl(target)
-
-
 def _needs_sudo(what: str, *, yes: bool = False) -> bool:
     """Decide how to run a system TeX Live tool: True = prefix with sudo.
 
-    Writable tree: no sudo. Otherwise offer a one-time chown (so this and tlmgr
+    Writable tree: no sudo. Otherwise offer a one-time chown (so TeX Live tools
     never need sudo again), falling back to sudo after a confirmation.
     """
     if (target := _tl_target()) is None:
@@ -1376,54 +992,19 @@ def _needs_sudo(what: str, *, yes: bool = False) -> bool:
     return True
 
 
-def _update_tlmgr() -> None:
-    """Run `tlmgr update --self` and log whether it updated tlmgr."""
-    console.print("[dim]Updating tlmgr...[/dim]")
-    result = _run([*_tl(), "update", "--self"])
-    out = result.stdout + result.stderr
-    if result.returncode != 0:
-        console.print(
-            "[yellow]tlmgr update failed (run with --debug for details).[/yellow]"
-        )
-    elif "no self-updates" in out:
-        console.print("[green]✔ tlmgr already up to date[/green]")
-    else:
-        console.print("[green]✔ tlmgr updated[/green]")
-
-
 def _ensure_latexmk() -> None:
-    """Install latexmk into the TeX Live tree in use (.texenv/ if standalone) if it's not there."""
+    """Install latexmk into .texenv/ from the archive store if it's not there."""
     env_dir = Path.cwd() / ".texenv"
     standalone = _standalone(env_dir)
     env_bin = texenv.env_bin(env_dir) if standalone else None
     found = shutil.which("latexmk")
     if found and (env_bin is None or Path(found).parent == env_bin):
         return
-    if _no_tlmgr():
-        _archive_tools(["latexmk"], "latexmk")
-        found = shutil.which("latexmk")
-        if found and (env_bin is None or Path(found).parent == env_bin):
-            return
-        console.print("[red]Could not install latexmk from the archive.[/red]")
-        raise typer.Exit(code=1)
-    if not tlmgr_path:
-        console.print("[red]latexmk and tlmgr not found; install TeX Live.[/red]")
-        raise typer.Exit(code=1)
-    _ensure_tl_writable()
-    install = [*_tl(), "install", "latexmk", "--machine-readable"]
-    for attempt in range(2):
-        with ShimmerProgress(console) as prog:
-            _install(prog, "Installing latexmk", install)
-        if shutil.which("latexmk") and (
-            env_bin is None or Path(shutil.which("latexmk")).parent == env_bin
-        ):
-            return
-        if attempt == 0:  # tlmgr refuses to install anything while it is outdated
-            console.print(
-                "[yellow]Install failed; updating tlmgr and retrying.[/yellow]"
-            )
-            _update_tlmgr()
-    console.print("[red]Could not install latexmk. Try `tlmgr install latexmk`.[/red]")
+    _archive_tools(["latexmk"], "latexmk")
+    found = shutil.which("latexmk")
+    if found and (env_bin is None or Path(found).parent == env_bin):
+        return
+    console.print("[red]Could not install latexmk from the archive.[/red]")
     raise typer.Exit(code=1)
 
 
@@ -1465,43 +1046,17 @@ def _make4ht_missing() -> list[str]:
 
 
 def _ensure_make4ht() -> None:
-    """Offer to install make4ht and its luaxml dependency into the system TeX Live."""
+    """Install make4ht and its luaxml dependency into .texenv/ from the archive store."""
     missing = _make4ht_missing()
     if not missing:
         return
-    missing_msg = f"[yellow]make4ht is not usable; missing: {', '.join(missing)}[/yellow]"
-    if _no_tlmgr():  # into .texenv/ from the archive store, never the system tree
-        console.print(missing_msg)
-        _archive_tools(missing, "make4ht")
-        if not _make4ht_missing():
-            return
-        console.print(f"[red]Could not install {', '.join(missing)}.[/red]")
-        raise typer.Exit(code=1)
-    if not tlmgr_path:
-        console.print("[red]make4ht needs TeX Live (tlmgr not found).[/red]")
-        raise typer.Exit(code=1)
-    console.print(missing_msg)
-    if not (
-        sys.stdin.isatty()
-        and _confirm(f"Install {', '.join(missing)} with tlmgr?", default=True)
-    ):
-        console.print(f"Install with: tlmgr install {' '.join(missing)}")
-        raise typer.Exit(code=1)
-    _ensure_tl_writable()
-    install = [*_tl(), "install", *missing, "--machine-readable"]
-    for attempt in range(2):
-        with ShimmerProgress(console) as prog:
-            _install(prog, "Installing make4ht", install)
-        if not _make4ht_missing():
-            return
-        if attempt == 0:  # tlmgr refuses to install while it is outdated
-            console.print(
-                "[yellow]Install failed; updating tlmgr and retrying.[/yellow]"
-            )
-            _update_tlmgr()
     console.print(
-        f"[red]Could not install. Try `tlmgr install {' '.join(missing)}`.[/red]"
+        f"[yellow]make4ht is not usable; missing: {', '.join(missing)}[/yellow]"
     )
+    _archive_tools(missing, "make4ht")
+    if not _make4ht_missing():
+        return
+    console.print(f"[red]Could not install {', '.join(missing)}.[/red]")
     raise typer.Exit(code=1)
 
 
@@ -1510,10 +1065,10 @@ def _ensure_make4ht() -> None:
     rich_help_panel="Project",
 )
 def sync(
-    no_update: bool = typer.Option(
+    no_upgrade: bool = typer.Option(
         False,
-        "--no-update",
-        help="Install only; skip updating packages that are already installed.",
+        "--no-upgrade",
+        help="Install only: don't fetch a newer package index or update installed packages.",
     ),
     debug: DebugOpt = False,
 ) -> None:
@@ -1535,25 +1090,17 @@ def sync(
     """
     _intro("texi sync")
     config = load_project_config(Path.cwd() / "texproject.toml")
-    _apply_project_tlmgr(config)
-    _sync(config.dependencies, no_update=no_update)
+    _apply_project(config)
+    if not no_upgrade:
+        _resolver_tlpdb(console, refresh=True)  # latest index: changed packages get updated
+    _sync(config.dependencies, no_upgrade=no_upgrade)
 
 
 def _target_arch(env_dir: Path) -> str | None:
-    """TeX Live architecture of the tree: the env's `bin/<arch>`, else the platform's.
-
-    Archive mode maps `sys.platform`/machine to a TeX Live name (checked against
-    the system tlpdb); tlmgr projects ask `tlmgr print-platform`.
-    """
+    """TeX Live architecture of the tree: the env's `bin/<arch>`, else the platform's."""
     if (bin_dir := texenv.env_bin(env_dir)) is not None:
         return bin_dir.name
-    if _no_tlmgr():
-        return tlpdb_mod.system_arch()
-    if tlmgr_path:
-        out = _run([tlmgr_path, "print-platform"])
-        if out.returncode == 0 and (arch := out.stdout.strip()):
-            return arch
-    return None
+    return tlpdb_mod.system_arch()
 
 
 def _archive_install(
@@ -1566,7 +1113,7 @@ def _archive_install(
     update: bool,
     infrastructure: bool = False,
 ) -> archive.Result:
-    """Install `roots` into .texenv/ from the archive store (never tlmgr)."""
+    """Install `roots` into .texenv/ from the archive store."""
     project = _peek_project()
     db = _resolver_tlpdb(console)
     if db is None:
@@ -1595,7 +1142,7 @@ def _archive_install(
         roots,
         env_dir,
         standalone=standalone,
-        # a usertree sits over the system TeX Live: read its tlpdb, never ask tlmgr
+        # a usertree sits over the system TeX Live: read its tlpdb
         system_installed=None if standalone else tlpdb_mod.system_installed,
         update=update,
         arch=_target_arch(env_dir),
@@ -1632,10 +1179,10 @@ def _sync_archive(
     project: ProjectConfig,
     packages: list[str],
     *,
-    no_update: bool,
+    no_upgrade: bool,
     keep: list[str] | None,
 ) -> None:
-    """`texi sync` for install_method = "archive": no tlmgr, nothing written outside .texenv/."""
+    """`texi sync`: nothing is written outside .texenv/."""
     env_dir = Path.cwd() / ".texenv"
     standalone = _standalone(env_dir)
     plural = inflect_engine.plural
@@ -1657,7 +1204,7 @@ def _sync_archive(
             env_dir,
             standalone=standalone,
             roots=packages,
-            update=not no_update,
+            update=not no_upgrade,
         )
     if result.present:
         console.print(
@@ -1673,7 +1220,7 @@ def _sync_archive(
     _report_failed(result, "packages")
     _activate_env(env_dir)  # arch binaries cloned into bin/<arch>
     if standalone or _standalone(env_dir):
-        _install_tex_fmt(env_dir)  # no-op when the tree has it
+        _install_tex_fmt(env_dir, update=not no_upgrade)
     # font maps and formats are handled by archive.install_packages (tlactions)
     synced = roots - set(result.missing)
     _update_lock(Path.cwd(), synced, keep if keep is not None else packages)
@@ -1685,165 +1232,26 @@ def _sync_archive(
 
 
 def _sync(
-    packages: list[str], *, no_update: bool, keep: list[str] | None = None
+    packages: list[str], *, no_upgrade: bool, keep: list[str] | None = None
 ) -> None:
-    """Install `packages` into .texenv/ (and update them unless no_update)."""
-    env_dir = Path.cwd() / ".texenv"
+    """Install `packages` into .texenv/ (and update them unless no_upgrade)."""
     project = load_project_config(Path.cwd() / "texproject.toml").project
-    _apply_install_method(project)
-    _create_env(project.texlive_env, project.repository, project.install_method)
-    standalone = _standalone(env_dir)
-
-    if project.install_method == "archive":
-        _sync_archive(project, packages, no_update=no_update, keep=keep)
-        return
-
-    if tlmgr_path:
-        _ensure_tl_writable()
-        _update_tlmgr()
-    _ensure_latexmk()
-    if not packages:
-        console.print(
-            "[yellow]No dependencies found in texproject.toml. Nothing to sync.[/yellow]"
-        )
-        return
-
-    env_dir.mkdir(exist_ok=True)
-    tlpdb_path = env_dir / "tlpkg" / "texlive.tlpdb"
-    plural = inflect_engine.plural
-
-    with ShimmerProgress(console) as prog:
-        if tlpdb_path.exists():
-            console.print("[green]Local TeX tree already initialized.[/green]")
-        else:
-            prog.on_progress("Initializing local usertree")
-            init_cmd = [*_tl(), "init-usertree", "--usertree", str(env_dir)]
-            _debug_cmd(init_cmd)
-            init_process = subprocess.Popen(
-                init_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
-            for line in init_process.stdout:
-                console.print(escape(line.strip()))
-            if init_process.wait() != 0:
-                console.print("[red]Initialization failed![/red]")
-                raise typer.Exit(code=1)
-
-        n = len(packages)
-        console.print(
-            f"[blue]Fetching metadata for {n} {plural('package', n)}:[/blue]\n"
-            f"[dim]{', '.join(sorted(packages))}[/dim]"
-        )
-        valid_dependencies, system_dependencies, already_installed = filter_packages(
-            packages, env_dir, prog
-        )
-        all_dependencies = set(
-            valid_dependencies + system_dependencies + already_installed
-        )
-        if already_installed:
-            console.print(
-                f"[green]✔ Skipping {len(already_installed)} already installed "
-                f"{plural('package', len(already_installed))}:[/green]\n"
-                f"[dim]{', '.join(sorted(already_installed))}[/dim]"
-            )
-
-        if valid_dependencies:
-            console.print(
-                f"[blue]Installing {len(valid_dependencies)} local "
-                f"{plural('package', len(valid_dependencies))}:[/blue]\n"
-                f"[dim]{', '.join(sorted(valid_dependencies))}[/dim]"
-            )
-            _install(
-                prog,
-                "Installing local packages",
-                [
-                    *_tl(),
-                    "install",
-                    *([] if standalone else ["--usertree", str(env_dir), "--usermode"]),
-                    *valid_dependencies,
-                    "--machine-readable",
-                ],
-            )
-
-        if system_dependencies:
-            _ensure_tl_writable()
-            console.print(
-                f"[blue]Installing {len(system_dependencies)} system "
-                f"{plural('package', len(system_dependencies))}:[/blue]\n"
-                f"[dim]{', '.join(sorted(system_dependencies))}[/dim]"
-            )
-            _install(
-                prog,
-                "Installing system packages",
-                [*_tl(), "install", *system_dependencies, "--machine-readable"],
-            )
-
-    if not no_update:
-        in_usertree = _usertree_packages(env_dir)
-        local = sorted(all_dependencies & in_usertree)
-        system = sorted(all_dependencies - in_usertree)
-        with ShimmerProgress(console) as prog:
-            if local:
-                _install(
-                    prog,
-                    "Updating local packages",
-                    [
-                        *_tl(),
-                        "update",
-                        *(
-                            []
-                            if standalone
-                            else ["--usertree", str(env_dir), "--usermode"]
-                        ),
-                        "--machine-readable",
-                        *local,
-                    ],
-                )
-            if system:
-                _install(
-                    prog,
-                    "Updating system packages",
-                    [*_tl(), "update", "--machine-readable", *system],
-                )
-
-    if not standalone:  # tlmgr maintains font maps itself in a full tree
-        _updmap_local(env_dir)
-    _update_lock(Path.cwd(), all_dependencies, keep if keep is not None else packages)
-    _note(
-        title=f"Synced {len(all_dependencies)} {plural('dependency', len(all_dependencies))} into .texenv/",
-        content=[escape(", ".join(sorted(all_dependencies)))],
-    )
-    outro("[green]✔ Sync complete[/green]")
+    _create_env(project.repository)
+    _sync_archive(project, packages, no_upgrade=no_upgrade, keep=keep)
 
 
 def _short_descriptions(names: list[str]) -> dict[str, str]:
-    """Package name -> short description (index first, then tlmgr unless archive mode). Unknown names are left out."""
+    """Package name -> short description from the index. Unknown names are left out."""
     if not names:
         return {}
     db = _resolver_tlpdb(console)
-    known = db.shortdesc(names) if db is not None else {}
-    missing = [n for n in names if n not in known]
-    if missing and not _no_tlmgr():
-        result = _tlmgr_info("--data", "name,shortdesc", *missing)
-        known.update({
-            row[0]: row[1]
-            for row in csv.reader(result.stdout.splitlines())
-            if len(row) >= 2 and row[0] in missing
-        })
-    return known
+    return db.shortdesc(names) if db is not None else {}
 
 
 def _tl_package_exists(name: str) -> bool:
-    """True if `name` is a TeX Live package (in the index, else per tlmgr)."""
+    """True if `name` is a TeX Live package in the index."""
     db = _resolver_tlpdb(console)
-    if db is not None and db.has(name):
-        return True
-    if _no_tlmgr():  # not in the index: unknown
-        return False
-    result = _tlmgr_info("--data", "name", name)
-    return any(line.strip() == name for line in result.stdout.splitlines())
+    return db is not None and db.has(name)
 
 
 def _lookup_packages(names: list[str]) -> dict[str, list[str] | None]:
@@ -1931,10 +1339,7 @@ def add(
     _intro("texi add")
     config_path = Path.cwd() / "texproject.toml"
     config = load_project_config(config_path)
-    _apply_project_tlmgr(config)
-    if not tlmgr_path and not _no_tlmgr():
-        console.print("[red]tlmgr not found; install TeX Live.[/red]")
-        raise typer.Exit(code=1)
+    _apply_project(config)
     lookup = _lookup_packages(list(dict.fromkeys(packages)))
     resolved = [n if c is None else _choose_package(n, c) for n, c in lookup.items()]
     packages = list(dict.fromkeys(r for r in resolved if r))
@@ -1948,11 +1353,11 @@ def add(
     else:
         console.print("[dim]Already in dependencies.[/dim]")
     if sync_all:
-        _sync([*config.dependencies, *new], no_update=False)
+        _sync([*config.dependencies, *new], no_upgrade=False)
     else:
         _sync(
             list(dict.fromkeys(packages)),
-            no_update=True,
+            no_upgrade=True,
             keep=[*config.dependencies, *new],
         )
 
@@ -2321,7 +1726,7 @@ def _run_latexmk(
             "[yellow]Warning: .texenv not found. Run `texi sync` for isolated dependencies.[/yellow]"
         )
 
-    if config.project.texlive_env == "usermode":
+    if not _standalone(env_dir):
         _ensure_latexmk()
     elif not (
         (b := texenv.env_bin(env_dir)) and (b / "latexmk").exists()
@@ -2533,7 +1938,7 @@ def _tex_fmt_binary(env_dir: Path) -> Path | None:
     """The project's own tex-fmt (installed on demand into a standalone tree), else the one on PATH."""
     if (b := texenv.env_bin(env_dir)) and (own := b / texfmt.BINARY).is_file():
         return own
-    if _standalone(env_dir) and (own := _install_tex_fmt(env_dir)):
+    if _standalone(env_dir) and (own := _install_tex_fmt(env_dir, update=False)):
         return own
     return Path(found) if (found := shutil.which("tex-fmt")) else None
 
@@ -2614,7 +2019,7 @@ class ExportFormat(str, Enum):
 
 _EXPORT_HINTS = {
     "pandoc": "brew install pandoc",
-    "make4ht": "tlmgr install make4ht tex4ht luaxml",
+    "make4ht": "texi add make4ht tex4ht luaxml",
     "latexmlc": "brew install latexml",
 }
 
@@ -2795,7 +2200,7 @@ def _fix_rebuild(config: TexProjectConfig, pdf: Path) -> None:
     else:
         console.print(
             "[yellow]cm-super Type 1 fonts not found. Install with: "
-            "texi add cm-super (or tlmgr install cm-super), and use "
+            "texi add cm-super, and use "
             f"{escape(chr(92) + 'usepackage[T1]{fontenc}')}.[/yellow]"
         )
     console.print(f"[dim]pdf_mode is {config.build.pdf_mode.value}[/dim]")
@@ -2962,7 +2367,6 @@ def info():
             for k, v in {
                 "Environment directory": env_dir.resolve(),
                 "TLPDB path": tlpdb_path.resolve(),
-                "Tlmgr path": tlmgr_path,
                 "Latexmk path": latexmk_path,
                 "Tex-fmt path": texfmt_path,
             }.items()
@@ -3104,32 +2508,75 @@ def luaotfload(
 
 
 @app.command(
-    help="Update TeX Live with tlmgr, then rebuild formats and font maps.",
-    rich_help_panel="TeX Live maintenance",
+    help="List packages in .texenv/ that have a newer revision in the repository. Installs nothing.",
+    rich_help_panel="Project",
 )
-def update(
-    yes: bool = typer.Option(
-        False,
-        "--yes",
-        "-y",
-        help="Don't ask; use sudo if the TeX Live tree isn't writable.",
-    ),
-) -> None:
-    """Update TeX Live (sudo tlmgr update --self --all), then rebuild formats and font maps."""
-    sudo = _needs_sudo("tlmgr update --self --all", yes=yes)
-    try:
-        console.print(escape(tools.tlmgr_update(sudo=sudo)))
-        console.print(escape(tools.fmtutil_sys(sudo=sudo)))
-        console.print(escape(tools.updmap_sys(sudo=sudo)))
-    except sh.ErrorReturnCode as e:
-        console.print(f"[red]{escape(str(e))}[/red]")
-        raise typer.Exit(1) from e
+def outdated(debug: DebugOpt = False) -> None:
+    """Fetch the latest package index and list what `texi sync` would update."""
+    _intro("texi outdated")
+    config = load_project_config(Path.cwd() / "texproject.toml")
+    _apply_project(config)
+    env_dir = Path.cwd() / ".texenv"
+    if not env_dir.is_dir():
+        console.print("[red]No .texenv/ yet. Run `texi sync`.[/red]")
+        raise typer.Exit(code=1)
+    db = _resolver_tlpdb(console, refresh=True)
+    if db is None:
+        console.print("[red]Package index unavailable (offline, no cached tlpdb).[/red]")
+        raise typer.Exit(code=1)
+    standalone = _standalone(env_dir)
+    roots = [*(texenv.CLONE_ROOTS if standalone else []), *config.dependencies]
+    pl = archive.plan(
+        db,
+        roots,
+        env_dir,
+        standalone=standalone,
+        system_installed=None if standalone else tlpdb_mod.system_installed,
+        update=True,
+        arch=_target_arch(env_dir),
+        infrastructure=standalone,
+    )
+    rows = [
+        (n, archive.installed_revision(env_dir, n), db.get(n).revision)
+        for n in sorted(pl.updates)
+    ]
+    for name, have, new in rows:
+        console.print(f"{escape(name)}  [dim]r{have}[/dim] → [green]r{new}[/green]")
+    tex_fmt_row = None
+    if standalone and (arch := _target_arch(env_dir)):
+        tex_fmt_row = texfmt.outdated(env_dir, arch)
+    if tex_fmt_row:
+        console.print(
+            f"tex-fmt  [dim]{tex_fmt_row[0]}[/dim] → [green]{tex_fmt_row[1]}[/green]"
+        )
+    if not rows and not tex_fmt_row:
+        outro("[green]✔ Everything is up to date[/green]")
+        return
+    n = len(rows) + (1 if tex_fmt_row else 0)
+    outro(
+        f"[yellow]{n} {inflect_engine.plural('package', n)} can be updated; "
+        "run `texi sync`[/yellow]"
+    )
+
+
+@app.command(
+    help="Fetch the latest package index and update the packages in .texenv/ (same as `texi sync`).",
+    rich_help_panel="Project",
+)
+def update(debug: DebugOpt = False) -> None:
+    """Update the project's packages from the repository; never touches the system TeX Live."""
+    _intro("texi update")
+    config = load_project_config(Path.cwd() / "texproject.toml")
+    _apply_project(config)
+    _resolver_tlpdb(console, refresh=True)
+    _sync(config.dependencies, no_upgrade=False)
 
 
 _ORDER = [
     "init",
     "add",
     "sync",
+    "outdated",
     "scan",
     "info",
     "build",

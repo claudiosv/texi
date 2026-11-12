@@ -567,7 +567,6 @@ def _system(location: str) -> tl.SystemTexLive:
 
 def test_resolve_repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tl, "load_local_installed", lambda root=None: None)
-    monkeypatch.setattr(tl, "tlmgr_repository", lambda: pytest.fail("tlmgr ran"))
     assert tl.resolve_repository("ctan", tmp_path) == (
         tl.DEFAULT_REPOSITORY,
         "--repository",
@@ -598,51 +597,10 @@ def test_resolve_repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert tl.resolve_repository(None, None) == (REPO, "texproject.toml")
 
 
-def test_resolve_repository_tlmgr_project_asks_tlmgr(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    (tmp_path / "texproject.toml").write_text(
-        '[project]\nname = "x"\ninstall_method = "tlmgr"\n'
-    )
-    monkeypatch.setattr(tl, "tlmgr_repository", lambda: "http://t/tlnet")
-    monkeypatch.setattr(tl, "load_local_installed", lambda root=None: None)
-    assert tl.resolve_repository(None, tmp_path) == (
-        "http://t/tlnet",
-        "tlmgr option repository",
-    )
-
-
-def test_tlmgr_repository_forbidden_in_archive_mode(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("TEXI_FORBID_TLMGR", "1")
-    with pytest.raises(AssertionError, match="archive mode"):
-        tl.tlmgr_repository()
-
-
 def test_normalize_repository() -> None:
     assert tl.normalize_repository("ctan") == tl.DEFAULT_REPOSITORY
     assert tl.normalize_repository("tlnet") == tl.DEFAULT_REPOSITORY
     assert tl.normalize_repository("https://x/y/") == "https://x/y"
-
-
-def test_tlmgr_repository(monkeypatch: pytest.MonkeyPatch) -> None:
-    class R:
-        def __init__(self, out: str) -> None:
-            self.stdout = out
-
-    def run_with(out: str) -> str | None:
-        monkeypatch.setattr(tl.shutil, "which", lambda _: "/bin/tlmgr")
-        monkeypatch.setattr(tl.subprocess, "run", lambda *a, **k: R(out))
-        return tl.tlmgr_repository()
-
-    pre = "Default package repository (repository): "
-    assert run_with(pre + "http://mirror.ctan.org/systems/texlive/tlnet\n") == (
-        "http://mirror.ctan.org/systems/texlive/tlnet"
-    )
-    assert run_with(pre + "ctan\n") == tl.DEFAULT_REPOSITORY
-    assert run_with(pre + "/local/dir\n") is None
-    assert run_with("garbage") is None
 
 
 # --- CLI ---------------------------------------------------------------------
@@ -752,7 +710,6 @@ def test_cli_group_without_subcommand_runs_stats(
 ) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(tl.shutil, "which", lambda _: None)  # no tlmgr
     monkeypatch.setattr(tl, "urlopen", lambda req, timeout: FakeResp(_xz(), FINAL, {}))
     r = cli()
     assert r.exit_code == 0, r.output

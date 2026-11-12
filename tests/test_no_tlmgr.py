@@ -158,29 +158,6 @@ def test_init_usertree_accepted_by_real_tlmgr(tmp_path: Path) -> None:
 # --- the ban itself ----------------------------------------------------------------
 
 
-def test_guard_raises_in_archive_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    tools.set_forbid_tlmgr(True)
-    with pytest.raises(AssertionError, match="tlmgr called in archive mode"):
-        cli._tl()
-    with pytest.raises(AssertionError):
-        cli._tlmgr_info("--data", "name", "x")  # type: ignore[arg-type]
-    with pytest.raises(AssertionError):
-        cli._search_bundles_tlmgr("x", cli.console, (".sty",))
-    tools.set_forbid_tlmgr(False)
-    monkeypatch.setenv("TEXI_FORBID_TLMGR", "1")
-    with pytest.raises(AssertionError):
-        cli._tl()
-
-
-def test_install_method_sets_the_ban() -> None:
-    cli._apply_install_method(cli.ProjectConfig())
-    assert tools.tlmgr_forbidden()
-    cli._apply_install_method(cli.ProjectConfig(install_method="tlmgr"))
-    assert not tools.tlmgr_forbidden()
-    cli._apply_install_method(None)  # no texproject.toml yet (texi init)
-    assert tools.tlmgr_forbidden()
-
-
 # --- flows with a tlmgr that fails loudly ---------------------------------------------
 
 
@@ -203,7 +180,6 @@ def shims(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         f.write_text(text)
         f.chmod(f.stat().st_mode | stat.S_IEXEC)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.setattr(cli, "tlmgr_path", str(bin_dir / "tlmgr"))
     return log
 
 
@@ -220,7 +196,7 @@ def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, system_root: Path) 
     monkeypatch.chdir(proj)
     monkeypatch.setattr(cli, "latexmk_path", None)  # _activate_env rebinds these
     db = tlpdb.parse_tlpdb(_db_text())
-    monkeypatch.setattr(cli, "_resolver_tlpdb", lambda console: db)
+    monkeypatch.setattr(cli, "_resolver_tlpdb", lambda console, refresh=False: db)
     monkeypatch.setattr(cli, "find_texlive_for_ctan", lambda name: [])
     monkeypatch.setattr(cli, "load_sty_cache", dict)
     monkeypatch.setattr(cli, "save_sty_cache", lambda cache: None)
@@ -310,7 +286,6 @@ def test_scan_and_init_never_run_tlmgr(
     (project / "texproject.toml").unlink()
     r = runner.invoke(cli.app, ["init"])
     assert r.exit_code == 0, r.output
-    assert 'install_method = "archive"' in (project / "texproject.toml").read_text()
     assert not shims.exists()
 
 
@@ -320,7 +295,6 @@ def test_latexmk_comes_from_the_archive_when_missing(
     (shims.parent / "shims" / "latexmk").unlink()
     monkeypatch.setenv("PATH", str(shims.parent / "shims"))
     calls: list[list[str]] = []
-    tools.set_forbid_tlmgr(True)
 
     def fake_install(prog, repository, env_dir, **kw):  # type: ignore[no-untyped-def]
         calls.append(kw["roots"])
@@ -347,50 +321,7 @@ def test_usertree_with_bin_is_not_standalone(tmp_path: Path) -> None:
     assert cli._standalone(env)
 
 
-def test_tlmgr_project_keeps_using_tlmgr(
-    project: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    (project / "texproject.toml").write_text(
-        '[project]\nname = "p"\ninstall_method = "tlmgr"\ndependencies = ["foo"]\n'
-    )
-    (project / ".texenv/tlpkg").mkdir(parents=True)
-    (project / ".texenv/tlpkg/texlive.tlpdb").write_text("name x\n")
-    seen: list[list[str]] = []
-
-    def fake_run(cmd):  # type: ignore[no-untyped-def]
-        seen.append(cmd)
-        return subprocess.CompletedProcess(cmd, 0, "", "")
-
-    monkeypatch.setattr(cli, "tlmgr_path", "/bin/tlmgr")
-    monkeypatch.setattr(cli, "_run", fake_run)
-    monkeypatch.setattr(cli, "_ensure_latexmk", lambda: None)
-    monkeypatch.setattr(cli, "filter_packages", lambda p, e, prog: ([], [], []))
-    monkeypatch.setattr(cli, "_updmap_local", lambda e: None)
-    monkeypatch.setattr(cli, "_update_lock", lambda *a: None)
-    r = runner.invoke(cli.app, ["sync", "--no-update"])
-    assert r.exit_code == 0, r.output
-    assert any("tlmgr" in c[0] and "update" in c for c in seen)
-
-
 # --- texlive_env = install / copy ---------------------------------------------------
-
-
-def test_install_env_without_tlmgr(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    ran: list[list[str]] = []
-    monkeypatch.setattr(
-        texenv, "_fetch_installer", lambda base: _fake_installer(tmp_path)
-    )
-    monkeypatch.setattr(
-        texenv.subprocess,
-        "run",
-        lambda cmd, **kw: _record(ran, cmd, tmp_path / "env"),
-    )
-    texenv.install_env(tmp_path / "env", "https://r/tlnet", tlmgr=False)
-    assert len(ran) == 1 and ran[0][0] == "perl" and "--scheme=minimal" in ran[0]
-    texenv.install_env(tmp_path / "env", "https://r/tlnet")
-    assert any("tlmgr" in c[0] for c in ran[1:])  # the old behavior is still there
 
 
 def _record(ran: list[list[str]], cmd: list[str], env: Path):  # type: ignore[no-untyped-def]
@@ -410,51 +341,6 @@ def _fake_installer(tmp_path: Path) -> Path:
         info.size = len(data)
         tf.addfile(info, io.BytesIO(data))
     return tarball
-
-
-def test_create_env_install_uses_archive_for_latex(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    for var in (
-        "PATH",
-        "TEXMFHOME",
-        "TEXMFVAR",
-        "TEXMFCONFIG",
-    ):  # _activate_env sets these
-        monkeypatch.setenv(var, os.environ.get(var, ""))
-    monkeypatch.setattr(cli, "tlmgr_path", None)
-    monkeypatch.setattr(cli, "latexmk_path", None)
-    tools.set_forbid_tlmgr(True)
-    got: dict[str, object] = {}
-
-    def fake_install_env(env_dir, repository=None, scheme="minimal", *, tlmgr=True):  # type: ignore[no-untyped-def]
-        got["tlmgr"] = tlmgr
-        (env_dir / "bin" / "x86_64-linux").mkdir(parents=True)
-        (env_dir / "tlpkg").mkdir()
-        (env_dir / "tlpkg/texlive.tlpdb").write_text("name 00texlive.config\n")
-
-    def fake_archive(prog, repository, env_dir, **kw):  # type: ignore[no-untyped-def]
-        got["roots"] = kw["roots"]
-        got["standalone"] = kw["standalone"]
-
-    monkeypatch.setattr(texenv, "install_env", fake_install_env)
-    monkeypatch.setattr(cli, "_archive_install", fake_archive)
-    monkeypatch.setattr(
-        cli,
-        "_tl",
-        lambda: pytest.fail("tlmgr"),
-    )
-    cli._create_env("install", "https://r/tlnet")
-    assert got == {"tlmgr": False, "roots": ["latex", "latexmk"], "standalone": True}
-
-
-def test_copy_env_does_not_call_tlmgr() -> None:
-    import inspect
-
-    assert "tlmgr" not in inspect.getsource(texenv.create_env).replace(
-        "tlmgr-managed", ""
-    )
 
 
 def test_build_reruns_full_after_previous_error(
@@ -518,3 +404,49 @@ def test_fmt_skips_texenv_and_build_dirs(
     names = sorted(Path(p).relative_to(project).as_posix() for p in seen)
     assert "a.tex" in names and "sec/b.tex" in names
     assert not any(n.startswith((".texenv", "build")) for n in names), names
+
+
+def test_outdated_lists_newer_revisions_and_installs_nothing(
+    project: Path, shims: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    texenv.init_usertree(project / ".texenv", REPO)
+    r = runner.invoke(cli.app, ["sync"])
+    assert r.exit_code == 0, r.output
+    r = runner.invoke(cli.app, ["outdated"])
+    assert r.exit_code == 0 and "up to date" in r.output, r.output
+
+    newer = tlpdb.parse_tlpdb(_db_text(foo_rev=101))
+    calls: list[bool] = []
+
+    def index(console, refresh=False):
+        calls.append(refresh)
+        return newer
+
+    monkeypatch.setattr(cli, "_resolver_tlpdb", index)
+    before = sorted(p.name for p in (project / ".texenv/tlpkg/tlpobj").iterdir())
+    r = runner.invoke(cli.app, ["outdated"])
+    assert r.exit_code == 0, r.output
+    assert "foo" in r.output and "r100" in r.output and "r101" in r.output
+    assert calls == [True]  # asked for a fresh index
+    assert not shims.exists()
+    assert before == sorted(p.name for p in (project / ".texenv/tlpkg/tlpobj").iterdir())
+    assert 'foo = 100' in (project / "texi.lock").read_text()  # nothing was installed
+
+
+def test_sync_refreshes_the_index_unless_no_upgrade(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    texenv.init_usertree(project / ".texenv", REPO)
+    db = tlpdb.parse_tlpdb(_db_text())
+    calls: list[bool] = []
+
+    def index(console, refresh=False):
+        calls.append(refresh)
+        return db
+
+    monkeypatch.setattr(cli, "_resolver_tlpdb", index)
+    assert runner.invoke(cli.app, ["sync"]).exit_code == 0
+    assert calls[0] is True
+    calls.clear()
+    assert runner.invoke(cli.app, ["sync", "--no-upgrade"]).exit_code == 0
+    assert True not in calls

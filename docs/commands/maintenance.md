@@ -46,14 +46,6 @@ Rebuild the LuaTeX font database, for example when `lualatex` can't find a font.
 |---|---|
 | `--force` | Rebuild the whole database (`--update --force`). |
 
-## `texi update`
-
-Update TeX Live with `tlmgr`, then rebuild formats and font maps.
-
-| option | description |
-|---|---|
-| `--yes`, `-y` | Don't ask; use sudo if the TeX Live tree isn't writable. |
-
 ## `texi tlpdb`
 
 Inspect the TeX Live package database (tlpdb): which packages exist, what they contain and which package ships a given file. Without a subcommand it runs `texi tlpdb stats`.

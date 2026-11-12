@@ -4,7 +4,7 @@
 
 An isolated workspace manager for LaTeX projects.
 
-`texi` wraps `tlmgr` and `latexmk` to give each LaTeX project its own local TeX Live tree (`.texenv/`), so package versions are pinned per-project and system-wide TeX Live is never polluted.
+`texi` wraps `latexmk` to give each LaTeX project its own standalone TeX Live tree (`.texenv/`), so package versions are pinned per-project and system-wide TeX Live is never polluted.
 
 ## Commands
 
@@ -19,10 +19,11 @@ An isolated workspace manager for LaTeX projects.
 | `texi fix-pdf [PDF]` | Deals with Type 3 fonts (rejected by ACM). The PDF defaults to the project's built PDF. `--method advise` (default) lists each Type 3 font with its pages, whether it is vector or bitmap, a guess where it came from, and how to fix it. `--method outline` converts vector Type 3 fonts to embedded TrueType (`-o` output, default `<name>.fixed.pdf`; `--in-place` overwrites and keeps a `.bak`); bitmap fonts cannot be converted. `--method rebuild` checks for Type 1 fonts (cm-super), rebuilds the project and re-checks the PDF. Exits 1 if Type 3 fonts remain. |
 | `texi export <markdown\|html\|tex4ht\|latexml>` | Converts to `build/export/<format>/`: Markdown or HTML via pandoc (with citeproc and MathJax), HTML via TeX4ht (`make4ht`, needs `luaxml`) or LaTeXML (`latexmlc`). |
 | `texi fmt [files]` | Formats `.tex` files under `src_dir` with `tex-fmt`, using the settings in `[tex-fmt]`. `--check` only reports. |
-| `texi scan` | Lists the packages your sources use and their `tlmgr` dependencies. |
+| `texi scan` | Lists the packages your sources use and their TeX Live packages. |
 | `texi tree` | Shows which files the last build actually read. |
 | `texi doctor` | Checks the TeX install and flags stale user-level formats. |
-| `texi formats` / `texi updmap` / `texi mktexlsr` / `texi luaotfload` / `texi update` | Rebuild formats, font maps, the `ls-R` filename databases (`--local` for `.texenv/` only) and the LuaTeX font database (`--force` for a full rebuild); update TeX Live. |
+| `texi formats` / `texi updmap` / `texi mktexlsr` / `texi luaotfload` | Rebuild formats, font maps, the `ls-R` filename databases (`--local` for `.texenv/` only) and the LuaTeX font database (`--force` for a full rebuild). |
+| `texi update` / `texi outdated` | Fetch the latest package index and update the packages in `.texenv/` (same as `texi sync`) / list what would be updated without installing. |
 | `texi tlpdb [stats\|search\|info]` | Inspects the TeX Live package database (downloaded and cached for 24 hours, or `--local` file). `stats` shows its URI, size and contents; `search QUERY...` finds packages (`--file` also searches file names, `--regex`, `--category`, `--exact`, `--limit`); `info NAME` (or a CTAN key) prints every field and file of a package (`--no-files`, `--all-files`, `--json`). |
 
 All commands accept `--debug` where it makes sense.
@@ -79,11 +80,10 @@ bibtex_use = "always"
 |---|---|---|
 | `name` | none | Project name. Used as the latexmk `$jobname` (so the PDF is `<name>.pdf`) unless `build.jobname` is set. `texi init` sets it to the directory name. |
 | `main` | `"main.tex"` | The main `.tex` file, relative to `src_dir`. `build.default_files` overrides it (and allows several). |
-| `texlive_env` | `"usermode"` | How `.texenv/` is made. `usermode`: a tlmgr usertree layered over the system TeX Live. `copy`: a standalone tree copied from the system install (a minimal package set, own `tlpkg/texlive.tlpdb`; approach from [texenv](https://github.com/ricklyon/texenv)); `tlmgr` then installs into `.texenv/` only. `install`: a fresh `install-tl` (scheme minimal plus latex and latexmk) into `.texenv/`. |
 | `texlive` | none | Expected TeX Live year, e.g. `"2026"`. texi warns if the installed year differs. |
-| `repository` | none | tlmgr repository to install from, passed as `tlmgr --repository`. Point it at a frozen tlnet to really pin versions. |
+| `repository` | none | TeX Live repository (`tlnet`) to install from. Point it at a frozen tlnet to really pin versions. |
 | `src_dir` | `"src"` | Directory holding the `.tex` sources. the generated `.latexmkrc` sets `$do_cd = 1` and `@default_files`, so latexmk runs inside `src_dir`. Use `"."` for sources in the project root (then latexmk picks up `*.tex` itself). |
-| `dependencies` | `[]` | `tlmgr` package names installed into `.texenv/` by `texi sync` / `texi add`. |
+| `dependencies` | `[]` | TeX Live package names installed into `.texenv/` by `texi sync` / `texi add`. |
 
 When `src_dir` is not `"."`, the generated `.latexmkrc` stays at the project root and:
 

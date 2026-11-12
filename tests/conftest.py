@@ -23,10 +23,9 @@ def pytest_collection_modifyitems(
 @pytest.fixture(autouse=True)
 def _reset_tlmgr_guard():
     """The tlmgr ban is per command; don't let one test's setting leak into the next."""
-    from texi import tlpdb, tools
+    from texi import tlpdb
 
     yield
-    tools.set_forbid_tlmgr(False)
     tlpdb.reset_system_cache()
 
 
@@ -43,4 +42,4 @@ def _no_tex_fmt_download(monkeypatch: pytest.MonkeyPatch):
     """CLI tests must not fetch tex-fmt from CTAN."""
     from texi import cli
 
-    monkeypatch.setattr(cli, "_install_tex_fmt", lambda env_dir: None)
+    monkeypatch.setattr(cli, "_install_tex_fmt", lambda env_dir, **kw: None)

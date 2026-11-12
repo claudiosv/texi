@@ -220,19 +220,16 @@ class ProjectConfig(BaseModel):
     main: str = "main.tex"
     # Expected TeX Live year (e.g. "2026"); texi warns if the installed one differs
     texlive: str | None = None
-    # How .texenv/ is made: "usermode" = tlmgr usertree over the system TeX Live,
-    # "copy" = standalone tree copied from the system install (minimal package set),
-    # "install" = fresh install-tl installation
+    # Deprecated and ignored (kept so existing texproject.toml files still load): .texenv/
+    # is always a standalone tree cloned from the archive store.
     texlive_env: Literal["usermode", "copy", "install"] = "usermode"
-    # How packages get into .texenv/: "archive" = download each package once into
-    # ~/.cache/texi/archive and clone it (copy-on-write) into the project, "tlmgr" = tlmgr install
-    install_method: Literal["archive", "tlmgr"] = "archive"
+    install_method: Literal["archive"] = "archive"
     # Check each downloaded package against the sha512 in the package index. A
     # mismatch is retried (first from the index's own mirror, then via the
     # redirector) and then refused. Set false to warn about a mismatch (a stale
     # mirror, usually) and install the package anyway.
     verify_checksums: bool = True
-    # tlmgr repository to install from; point at a frozen tlnet to truly pin versions
+    # TeX Live repository (tlnet) to install from; point at a frozen tlnet to truly pin versions
     repository: str | None = None
     # Directory holding the .tex sources; "." = project root. latexmk runs with -cd.
     src_dir: str = "src"

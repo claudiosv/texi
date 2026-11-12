@@ -146,7 +146,6 @@ def index(monkeypatch: pytest.MonkeyPatch) -> tl.Tlpdb:
     """The sample tlpdb plus a few synthetic entries; the fallbacks must not run."""
     db = tl.parse_tlpdb(FIXTURE.read_text(encoding="utf-8") + "\n" + EXTRA)
     monkeypatch.setattr(cli, "_resolver_tlpdb", lambda console: db)
-    monkeypatch.setattr(cli, "_search_bundles_tlmgr", _no_fallback)
     monkeypatch.setattr(cli, "find_texlive_for_ctan", _no_fallback)
     return db
 
@@ -178,9 +177,8 @@ def test_index_ignores_doc_files(
     # has no candidate and the pipeline is asked
     calls: list[str] = []
     monkeypatch.setattr(
-        cli, "_search_bundles_tlmgr", lambda n, c, e: calls.append(n) or []
+        cli, "find_texlive_for_ctan", lambda n: calls.append(n) or []
     )
-    monkeypatch.setattr(cli, "find_texlive_for_ctan", lambda n: [])
     assert cli.find_bundle_for_sty("acmart-doc", Console(), {}) == []
     assert calls == ["acmart-doc"]
 
@@ -216,14 +214,11 @@ def test_index_miss_uses_pipeline_and_caches_answer(
 ) -> None:
     calls: list[str] = []
     monkeypatch.setattr(
-        cli, "_search_bundles_tlmgr", lambda n, c, e: calls.append("tlmgr") or []
-    )
-    monkeypatch.setattr(
         cli, "find_texlive_for_ctan", lambda n: calls.append("ctan") or ["from-ctan"]
     )
     cache: dict[str, list[str]] = {}
     assert cli.find_bundle_for_sty("nonexistentpkg", Console(), cache) == ["from-ctan"]
-    assert calls == ["tlmgr", "ctan"]
+    assert calls == ["ctan"]
     # a consulted index plus an answering pipeline: even "nothing" is remembered
     monkeypatch.setattr(cli, "find_texlive_for_ctan", lambda n: [])
     assert cli.find_bundle_for_sty("nothing", Console(), cache) == []
@@ -236,7 +231,6 @@ def test_index_miss_uses_pipeline_and_caches_answer(
 
 def test_no_index_negative_result_not_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli, "_resolver_tlpdb", lambda console: None)
-    monkeypatch.setattr(cli, "_search_bundles_tlmgr", lambda n, c, e: [])
     monkeypatch.setattr(cli, "find_texlive_for_ctan", lambda n: [])
     cache: dict[str, list[str]] = {}
     assert cli.find_bundle_for_sty("nope", Console(), cache) == []
@@ -278,85 +272,31 @@ def test_resolver_tlpdb_loaded_once_and_failure_memoized(
     cli._reset_tlpdb_memo()
 
 
-def test_short_descriptions_prefer_index(
-    index: tl.Tlpdb, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    asked: list[tuple[str, ...]] = []
-
-    class R:
-        stdout = "other,From tlmgr\n"
-
-    def fake_info(*args: str) -> R:
-        asked.append(args)
-        return R()
-
-    monkeypatch.setattr(cli, "_tlmgr_info", fake_info)
+def test_short_descriptions_come_from_the_index(index: tl.Tlpdb) -> None:
     got = cli._short_descriptions(["kastrup", "other"])
-    assert got == {
-        "kastrup": "Convert numbers into binary, octal and hexadecimal",
-        "other": "From tlmgr",
-    }
-    assert asked == [("--data", "name,shortdesc", "other")]
-    asked.clear()
-    assert cli._short_descriptions(["kastrup"])["kastrup"].startswith("Convert")
-    assert asked == []  # tlmgr not called when the index knows every name
+    assert got == {"kastrup": "Convert numbers into binary, octal and hexadecimal"}
 
 
-def test_tl_package_exists_index_then_tlmgr(
-    index: tl.Tlpdb, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    class R:
-        stdout = "ghost\n"
-
-    calls: list[str] = []
-    monkeypatch.setattr(cli, "_tlmgr_info", lambda *a: calls.append(a[-1]) or R())
-    assert cli._tl_package_exists("kastrup") and calls == []
+def test_tl_package_exists_uses_only_the_index(index: tl.Tlpdb) -> None:
+    assert cli._tl_package_exists("kastrup")
     assert not cli._tl_package_exists("binhex")  # a catalogue key, not a package
-    assert cli._tl_package_exists("ghost")  # unknown to the index: tlmgr decides
-    assert calls == ["binhex", "ghost"]
+    assert not cli._tl_package_exists("ghost")
 
 
 def test_fallback_pipeline_without_tlpdb(monkeypatch: pytest.MonkeyPatch) -> None:
-    """tlpdb unavailable: tlmgr search, then CTAN, as before the index existed."""
+    """tlpdb unavailable: CTAN decides."""
     from rich.console import Console
 
-    found: dict[str, list[str]] = {}
     ctan: dict[str, list[str] | None] = {}
-    ctan_calls: list[str] = []
-
-    def fake_ctan_lookup(n: str) -> list[str] | None:
-        ctan_calls.append(n)
-        return ctan[n]
-
-    monkeypatch.setattr(cli, "_resolver_tlpdb", lambda console: None)
-    monkeypatch.setattr(cli, "_search_bundles_tlmgr", lambda n, c, e: found[n])
-    monkeypatch.setattr(cli, "find_texlive_for_ctan", fake_ctan_lookup)
+    monkeypatch.setattr(cli, "_resolver_tlpdb", lambda console, refresh=False: None)
+    monkeypatch.setattr(cli, "find_texlive_for_ctan", lambda n: ctan[n])
     cache: dict[str, list[str]] = {}
     con = Console()
 
-    # one tlmgr hit: CTAN is not asked
-    found["a"] = ["pkg-a"]
-    assert cli.find_bundle_for_sty("a", con, cache) == ["pkg-a"]
-    assert ctan_calls == []
-
-    # several hits, CTAN texlive field is one of them: it wins
-    found["b"], ctan["b"] = ["x", "kastrup", "y"], ["kastrup"]
-    assert cli.find_bundle_for_sty("b", con, cache) == ["kastrup"]
-
-    # several hits, CTAN names none of them: all returned for the prompt
-    found["c"], ctan["c"] = ["x", "y"], ["other"]
-    assert cli.find_bundle_for_sty("c", con, cache) == ["x", "y"]
-
-    # several hits, CTAN offline: all returned, not cached
-    found["d"], ctan["d"] = ["x", "y"], None
-    assert cli.find_bundle_for_sty("d", con, cache) == ["x", "y"]
-    assert "d" not in cache
-
-    # no tlmgr hit: CTAN is the fallback
-    found["e"], ctan["e"] = [], ["kastrup"]
+    ctan["e"] = ["kastrup"]
     assert cli.find_bundle_for_sty("e", con, cache) == ["kastrup"]
 
     # nothing anywhere, offline: not cached
-    found["f"], ctan["f"] = [], None
+    ctan["f"] = None
     assert cli.find_bundle_for_sty("f", con, cache) == []
     assert "f" not in cache

@@ -48,8 +48,8 @@ RepoOpt = Annotated[
     typer.Option(
         "--repository",
         "-r",
-        help="TeX Live repository URL. Default: texproject.toml, then "
-        "`tlmgr option repository`, then mirror.ctan.org.",
+        help="TeX Live repository URL. Default: texproject.toml, then the "
+        "system tlpdb's location, then mirror.ctan.org.",
     ),
 ]
 LocalOpt = Annotated[

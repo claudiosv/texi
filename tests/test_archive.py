@@ -508,7 +508,8 @@ def test_install_method_config() -> None:
     from texi.config import ProjectConfig
 
     assert ProjectConfig().install_method == "archive"
-    assert ProjectConfig(install_method="tlmgr").install_method == "tlmgr"
+    with pytest.raises(ValidationError):
+        ProjectConfig(install_method="tlmgr")  # removed
     with pytest.raises(ValidationError):
         ProjectConfig(install_method="pip")  # ty: ignore[invalid-argument-type]
 
@@ -638,59 +639,84 @@ def test_giving_up_on_a_mismatch_suggests_pinning() -> None:
         archive.fetch(REPO, db.get("bar"), client=make_client(corrupt=True))
 
 
-def _formatter_zip(asset: str, payload: bytes = b"#!/bin/sh\necho tex-fmt\n") -> bytes:
+def _formatter_tgz(payload: bytes = b"#!/bin/sh\necho tex-fmt\n") -> bytes:
     tgz = io.BytesIO()
     with tarfile.open(fileobj=tgz, mode="w:gz") as tf:
         info = tarfile.TarInfo("tex-fmt")
         info.size = len(payload)
         info.mode = 0o755
         tf.addfile(info, io.BytesIO(payload))
-    out = io.BytesIO()
-    import zipfile
-
-    with zipfile.ZipFile(out, "w") as zf:
-        zf.writestr(f"latex-formatter/bin/tex-fmt-{asset}.tar.gz", tgz.getvalue())
-    return out.getvalue()
+    return tgz.getvalue()
 
 
-def test_tex_fmt_is_installed_from_ctan_once(tmp_path: Path, store: Path) -> None:
+class _Ctan:
+    """Fake ctan.org JSON record and mirrors.ctan.org binary."""
+
+    def __init__(self, version: str = "0.5.7") -> None:
+        self.version = version
+        self.hits: list[str] = []
+
+    def client(self) -> httpx.Client:
+        def handler(req: httpx.Request) -> httpx.Response:
+            self.hits.append(req.url.path)
+            if req.url.host == "ctan.org":
+                return httpx.Response(200, json={"version": {"number": self.version}})
+            body = f"#!/bin/sh\necho tex-fmt {self.version}\n".encode()
+            return httpx.Response(200, content=_formatter_tgz(body))
+
+        return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_tex_fmt_is_installed_from_a_direct_url_once(tmp_path: Path, store: Path) -> None:
     from texi import texfmt
 
-    hits: list[str] = []
-    blob = _formatter_zip("aarch64-macos")
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        hits.append(req.url.path)
-        if req.url.host == "ctan.org":
-            return httpx.Response(200, json={"version": {"number": "0.5.7"}})
-        return httpx.Response(200, content=blob)
-
-    client = httpx.Client(transport=httpx.MockTransport(handler))
+    ctan = _Ctan()
+    client = ctan.client()
     env = tmp_path / "p" / ".texenv"
-    got = texfmt.ensure(env, "universal-darwin", client=client)
-    if texfmt.asset_name("universal-darwin") != "aarch64-macos":
-        pytest.skip("test zip is for arm64 macOS")
-    assert got == env / "bin/universal-darwin/tex-fmt" and os.access(got, os.X_OK)
-    assert len(hits) == 2
-    # a second tree uses the store (version lookup only); the same tree does nothing
-    env2 = tmp_path / "q" / ".texenv"
-    texfmt.ensure(env2, "universal-darwin", client=client)
-    assert hits.count("/support/latex-formatter.zip") == 1
-    texfmt.ensure(env, "universal-darwin", client=client)
-    assert len(hits) == 3
+    got = texfmt.ensure(env, "x86_64-linux", client=client)
+    assert got == env / "bin/x86_64-linux/tex-fmt" and os.access(got, os.X_OK)
+    assert ctan.hits == [
+        "/json/2.0/pkg/latex-formatter",
+        "/support/latex-formatter/bin/tex-fmt-x86_64-linux.tar.gz",
+    ]
+    # a second tree takes it from the store: only the JSON record is read
+    texfmt.ensure(tmp_path / "q" / ".texenv", "x86_64-linux", client=client)
+    assert sum("tar.gz" in h for h in ctan.hits) == 1
 
 
-def test_tex_fmt_failure_is_only_a_notice(tmp_path: Path) -> None:
+def test_tex_fmt_updates_only_when_ctan_has_a_newer_version(
+    tmp_path: Path, store: Path
+) -> None:
     from texi import texfmt
 
-    client = httpx.Client(
-        transport=httpx.MockTransport(lambda req: httpx.Response(500))
-    )
+    ctan = _Ctan("0.5.7")
+    client = ctan.client()
+    env = tmp_path / ".texenv"
+    texfmt.ensure(env, "x86_64-linux", client=client)
+    ctan.hits.clear()
+    texfmt.ensure(env, "x86_64-linux", client=client)  # same version: JSON only
+    assert ctan.hits == ["/json/2.0/pkg/latex-formatter"]
+    ctan.hits.clear()
+    texfmt.ensure(env, "x86_64-linux", client=client, update=False)  # no request at all
+    assert ctan.hits == []
+    ctan.version = "0.6.0"
+    texfmt.ensure(env, "x86_64-linux", client=client)
+    assert texfmt.installed_version(env) == "0.6.0"
+    assert "0.6.0" in (env / "bin/x86_64-linux/tex-fmt").read_text()
+
+
+def test_tex_fmt_failure_is_only_a_notice(tmp_path: Path, store: Path) -> None:
+    from texi import texfmt
+
+    down = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(500)))
     notes: list[str] = []
-    assert (
-        texfmt.ensure(tmp_path / ".texenv", "x86_64-linux", client=client, notice=notes.append)
-        is None
-    )
+    env = tmp_path / ".texenv"
+    assert texfmt.ensure(env, "x86_64-linux", client=down, notice=notes.append) is None
     assert notes and "tex-fmt not installed" in notes[0]
+    # a tree that has one keeps it, silently, when CTAN cannot be reached
+    texfmt.ensure(env, "x86_64-linux", client=_Ctan().client())
+    notes.clear()
+    assert texfmt.ensure(env, "x86_64-linux", client=down, notice=notes.append)
+    assert notes == []
     assert texfmt.asset_name("windows") is None
     assert texfmt.asset_name("x86_64-linuxmusl") == "x86_64-alpine"

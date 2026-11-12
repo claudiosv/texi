@@ -16,7 +16,6 @@ import json
 import lzma
 import os
 import re
-import shutil
 import sqlite3
 import subprocess
 import urllib.error
@@ -31,7 +30,6 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from texi.resolver import is_pseudo_record
-from texi.tools import assert_tlmgr_allowed
 
 DEFAULT_REPOSITORY = "https://mirror.ctan.org/systems/texlive/tlnet"
 USER_AGENT = "texi (+https://github.com/claudiosv/texi)"
@@ -988,31 +986,6 @@ def normalize_repository(repo: str) -> str:
     return repo.rstrip("/")
 
 
-def tlmgr_repository() -> str | None:
-    """The repository from ``tlmgr option repository`` if it is an http(s) URL.
-
-    Runs tlmgr, so it is only for ``install_method = "tlmgr"`` projects.
-    """
-    assert_tlmgr_allowed()
-    if not shutil.which("tlmgr"):
-        return None
-    try:
-        out = subprocess.run(
-            ["tlmgr", "option", "repository"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        ).stdout
-    except OSError, subprocess.SubprocessError:
-        return None
-    # "Default package repository (repository): http://..."; the URL has ':' too
-    m = re.search(r"\):\s*(\S+)", out)
-    if not m:
-        return None
-    return _http_repository(m.group(1))
-
-
 def _http_repository(value: str) -> str | None:
     """A usable repository URL from a tlmgr/tlpdb option value, else None."""
     if value.lower() in ("ctan", "tlnet"):
@@ -1227,19 +1200,13 @@ def resolve_repository(
 
     Order: the ``repository`` argument, ``[project] repository`` of the
     texproject.toml in ``project_dir`` (default: the cwd), the system tlpdb's
-    ``opt_location`` (what ``tlmgr option repository`` shows), then
-    :data:`DEFAULT_REPOSITORY`. Only a project with
-    ``install_method = "tlmgr"`` asks tlmgr itself instead.
+    ``opt_location``, then :data:`DEFAULT_REPOSITORY`.
     """
     if repository:
         return normalize_repository(repository), "--repository"
     project = _project_config(project_dir)
     if project is not None and project.repository:
         return normalize_repository(project.repository), "texproject.toml"
-    if project is not None and project.install_method == "tlmgr":
-        tlmgr = tlmgr_repository()
-        if tlmgr:
-            return tlmgr, "tlmgr option repository"
     info = load_local_installed()
     if info is not None and info.location:
         return info.location, "system tlpdb"

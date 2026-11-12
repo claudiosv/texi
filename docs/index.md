@@ -2,18 +2,12 @@
 
 An isolated workspace manager for LaTeX projects, in the spirit of `uv` for Python.
 
-`texi` wraps `tlmgr` and `latexmk` and gives each LaTeX project its own local TeX Live tree (`.texenv/`). One `texproject.toml` describes the project: its packages, engine and build options.
-
-The local tree is created in one of three ways, chosen with `texlive_env`:
-
-- **`usermode`** (default): a tlmgr user tree layered over the system TeX Live. Packages that exist only on the system, such as `latexmk`, are reused.
-- **`copy`**: a standalone tree copied from an existing TeX Live install, with a minimal package set.
-- **`install`**: a fresh, minimal TeX Live tree (scheme minimal plus latex and latexmk) installed with `install-tl`.
+`texi` wraps `latexmk` and gives each LaTeX project its own standalone TeX Live tree (`.texenv/`), built from packages cloned out of a shared cache. One `texproject.toml` describes the project: its packages, engine and build options.
 
 ## Why texi
 
 - **Per-project packages.** Dependencies install into `.texenv/`, so one paper's package updates never break another, and the system TeX Live stays untouched.
-- **No tlmgr, no system writes (archive mode).** With the default `install_method = "archive"`, texi never calls `tlmgr` and never writes to the system TeX Live. It reads the system `tlpkg/texlive.tlpdb` to see what is installed, creates the user tree skeleton itself, and installs everything else (including `latexmk`) into `.texenv/`. `texi doctor` may report whether `tlmgr` exists but does not need it.
+- **No tlmgr, no system TeX Live.** texi never calls `tlmgr`, never reads or writes the system TeX Live, and needs only `perl` from the system. It installs `.texenv/` itself from the CTAN `tlnet` containers; see [texi sync](commands/project.md#texi-sync).
 - **Shared cache, instant installs.** Packages are downloaded once into `~/.cache/texi/archive/<ID>/<package>/` and copy-on-write cloned into each project's `.texenv/` (like uv does for Python), so a second project that needs the same package installs in milliseconds and offline. Set `install_method = "tlmgr"` to use `tlmgr install` instead.
 - **Resolves package name mismatches.** The name TeX loads is a file name, which is not always the name of the package that ships it. For example, `binhex` is provided by the `kastrup` package, so `tlmgr install binhex` fails. texi first looks the name up in a local index of the TeX Live package database (the same data as `texi tlpdb`, cached in `~/.cache/texi/tlpdb/`; it is downloaded once and refreshed every 24 hours). Candidates are the packages that ship a run file `<name>.sty` or `<name>.cls` (`texi add` also accepts `.tex`), plus those whose `catalogue` field is the name, which is how `binhex` finds `kastrup`. Collections and schemes are ignored. A package called exactly the name wins, then one whose catalogue key is the name, then a single candidate; otherwise `texi add` asks you to pick one (showing each short description), and `texi init` and `texi scan` take the first. If the index is unavailable or knows nothing, texi runs `tlmgr search --file --global --word`; if that finds several packages, it asks the CTAN API (`ctan.org/json/3.0`) and reads the `texlive` field of the package record, and if tlmgr finds nothing the CTAN answer is used on its own. The raw name is kept if nobody knows it. Results are cached in `~/.cache/texi/`; a lookup that needed CTAN while offline is not cached.
 - **Reproducible.** `texi sync` writes `texi.lock` with the TeX Live year and the installed revision of every package. Commit it, and texi lists what changed when a later sync differs. Set `repository` to a frozen tlnet to pin versions for real.
