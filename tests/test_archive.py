@@ -636,3 +636,61 @@ def test_giving_up_on_a_mismatch_suggests_pinning() -> None:
     db = tlpdb.parse_tlpdb(_db_text())
     with pytest.raises(archive.ArchiveError, match="Pin one with"):
         archive.fetch(REPO, db.get("bar"), client=make_client(corrupt=True))
+
+
+def _formatter_zip(asset: str, payload: bytes = b"#!/bin/sh\necho tex-fmt\n") -> bytes:
+    tgz = io.BytesIO()
+    with tarfile.open(fileobj=tgz, mode="w:gz") as tf:
+        info = tarfile.TarInfo("tex-fmt")
+        info.size = len(payload)
+        info.mode = 0o755
+        tf.addfile(info, io.BytesIO(payload))
+    out = io.BytesIO()
+    import zipfile
+
+    with zipfile.ZipFile(out, "w") as zf:
+        zf.writestr(f"latex-formatter/bin/tex-fmt-{asset}.tar.gz", tgz.getvalue())
+    return out.getvalue()
+
+
+def test_tex_fmt_is_installed_from_ctan_once(tmp_path: Path, store: Path) -> None:
+    from texi import texfmt
+
+    hits: list[str] = []
+    blob = _formatter_zip("aarch64-macos")
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        hits.append(req.url.path)
+        if req.url.host == "ctan.org":
+            return httpx.Response(200, json={"version": {"number": "0.5.7"}})
+        return httpx.Response(200, content=blob)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    env = tmp_path / "p" / ".texenv"
+    got = texfmt.ensure(env, "universal-darwin", client=client)
+    if texfmt.asset_name("universal-darwin") != "aarch64-macos":
+        pytest.skip("test zip is for arm64 macOS")
+    assert got == env / "bin/universal-darwin/tex-fmt" and os.access(got, os.X_OK)
+    assert len(hits) == 2
+    # a second tree uses the store (version lookup only); the same tree does nothing
+    env2 = tmp_path / "q" / ".texenv"
+    texfmt.ensure(env2, "universal-darwin", client=client)
+    assert hits.count("/support/latex-formatter.zip") == 1
+    texfmt.ensure(env, "universal-darwin", client=client)
+    assert len(hits) == 3
+
+
+def test_tex_fmt_failure_is_only_a_notice(tmp_path: Path) -> None:
+    from texi import texfmt
+
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda req: httpx.Response(500))
+    )
+    notes: list[str] = []
+    assert (
+        texfmt.ensure(tmp_path / ".texenv", "x86_64-linux", client=client, notice=notes.append)
+        is None
+    )
+    assert notes and "tex-fmt not installed" in notes[0]
+    assert texfmt.asset_name("windows") is None
+    assert texfmt.asset_name("x86_64-linuxmusl") == "x86_64-alpine"

@@ -493,3 +493,28 @@ def test_all_warnings_flag_lists_everything(
     full = capsys.readouterr().out
     assert "5 more warnings" in short and "--all-warnings" in short
     assert "more warnings" not in full and "w19" in full
+
+
+def test_fmt_skips_texenv_and_build_dirs(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (project / "texproject.toml").write_text(
+        f'[project]\nname = "p"\nrepository = "{REPO}"\nsrc_dir = "."\n'
+    )
+    for rel in ("a.tex", "sec/b.tex", ".texenv/x/pkg.tex", "build/aux/c.tex"):
+        f = project / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("x\n")
+    seen: list[str] = []
+
+    def fake_run(cmd, **kw):
+        seen.extend(c for c in cmd if c.endswith(".tex"))
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(cli, "_tex_fmt_binary", lambda env_dir: Path("tex-fmt"))
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    r = runner.invoke(cli.app, ["fmt", "--check"])
+    assert r.exit_code == 0, r.output
+    names = sorted(Path(p).relative_to(project).as_posix() for p in seen)
+    assert "a.tex" in names and "sec/b.tex" in names
+    assert not any(n.startswith((".texenv", "build")) for n in names), names

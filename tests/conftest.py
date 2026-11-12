@@ -36,3 +36,11 @@ def _no_retry_wait(monkeypatch: pytest.MonkeyPatch):
     from texi import archive
 
     monkeypatch.setattr(archive.time, "sleep", lambda _s: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_tex_fmt_download(monkeypatch: pytest.MonkeyPatch):
+    """CLI tests must not fetch tex-fmt from CTAN."""
+    from texi import cli
+
+    monkeypatch.setattr(cli, "_install_tex_fmt", lambda env_dir: None)

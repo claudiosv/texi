@@ -31,7 +31,7 @@ from rich.markup import escape
 from rich.text import Text
 from rich.tree import Tree
 
-from texi import archive, logparse_bib, pdffonts, texenv, tools
+from texi import archive, logparse_bib, pdffonts, texenv, texfmt, tools
 from texi import tlpdb as tlpdb_mod
 from texi.ctan import CtanClient
 from texi.logparse import (
@@ -1119,9 +1119,21 @@ def _clone_env_tree(repository: str | None) -> None:
             infrastructure=True,
         )
     _report_failed(result, "packages")  # exits 1; the next `texi sync` resumes
+    _install_tex_fmt(env_dir)
     (env_dir / texenv.CLONE_DONE).write_text("ok\n", encoding="utf-8")
     _activate_env(env_dir)
     console.print("[green]✔ Created .texenv/[/green]")
+
+
+def _install_tex_fmt(env_dir: Path) -> Path | None:
+    """tex-fmt from CTAN (`latex-formatter`) into the tree; a failure only warns."""
+    if not _standalone(env_dir):
+        return None
+    return texfmt.ensure(
+        env_dir,
+        _target_arch(env_dir),
+        notice=lambda m: console.print(f"[yellow]{escape(m)}[/yellow]"),
+    )
 
 
 def _create_env(
@@ -1660,6 +1672,8 @@ def _sync_archive(
         )
     _report_failed(result, "packages")
     _activate_env(env_dir)  # arch binaries cloned into bin/<arch>
+    if standalone or _standalone(env_dir):
+        _install_tex_fmt(env_dir)  # no-op when the tree has it
     # font maps and formats are handled by archive.install_packages (tlactions)
     synced = roots - set(result.missing)
     _update_lock(Path.cwd(), synced, keep if keep is not None else packages)
@@ -2515,6 +2529,15 @@ def texfmt_config(cfg: TexFmtConfig) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _tex_fmt_binary(env_dir: Path) -> Path | None:
+    """The project's own tex-fmt (installed on demand into a standalone tree), else the one on PATH."""
+    if (b := texenv.env_bin(env_dir)) and (own := b / texfmt.BINARY).is_file():
+        return own
+    if _standalone(env_dir) and (own := _install_tex_fmt(env_dir)):
+        return own
+    return Path(found) if (found := shutil.which("tex-fmt")) else None
+
+
 @app.command(
     help="Tidy your .tex files with tex-fmt, using the \\[tex-fmt] settings in texproject.toml.",
     rich_help_panel="Build",
@@ -2536,12 +2559,27 @@ def fmt(
     _intro("texi fmt")
     cwd = Path.cwd()
     config = load_project_config(cwd / "texproject.toml")
-    if not shutil.which("tex-fmt"):
+    tex_fmt = _tex_fmt_binary(cwd / ".texenv")
+    if tex_fmt is None:
         console.print(
-            "[red]tex-fmt not found.[/red] Try `brew install tex-fmt` or `cargo install tex-fmt`."
+            "[red]tex-fmt not found.[/red] Run `texi sync` to install it into .texenv/, "
+            "or `brew install tex-fmt` / `cargo install tex-fmt`."
         )
         raise typer.Exit(code=1)
-    targets = files or sorted((cwd / config.src_dir).rglob("*.tex"))
+    skip_dirs = [
+        cwd / d
+        for d in (config.build.out_dir, config.build.aux_dir, config.build.out2_dir)
+        if d
+    ]
+    targets = files or sorted(
+        f
+        for f in (cwd / config.src_dir).rglob("*.tex")
+        # never the packages in .texenv/ or other hidden dirs, nor build output
+        if not any(
+            p.startswith(".") for p in f.relative_to(cwd / config.src_dir).parts[:-1]
+        )
+        and not any(d in f.parents for d in skip_dirs)
+    )
     if not targets:
         console.print("[yellow]No .tex files found.[/yellow]")
         return
@@ -2549,7 +2587,7 @@ def fmt(
     # takes precedence over any tex-fmt.toml on disk, while --noconfig would
     # ignore it too.
     cmd = [
-        "tex-fmt",
+        str(tex_fmt),
         "--config",
         "/dev/stdin",
         *(["--check"] if check else []),
