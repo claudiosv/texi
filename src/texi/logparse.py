@@ -1,245 +1,46 @@
-"""Turn TeX / BibTeX / biber logs into a short list of diagnostics.
+"""Turn TeX / BibTeX / biber / makeindex / latexmk output into diagnostics.
 
-The parser expects logs written with a huge max_print_line (texi sets it), so
-TeX never wraps lines, and works best with -file-line-error.
+This module is the stable facade; the work happens in
+
+- `texi.logparse_core`: `Diagnostic` and the result dataclasses
+- `texi.logparse_tex`: pdfTeX / XeTeX / LuaTeX logs and engine stdout
+- `texi.logparse_bib`: BibTeX and Biber `.blg`
+- `texi.logparse_index`: makeindex / xindy / makeglossaries `.ilg` / `.glg`
+- `texi.logparse_latexmk`: latexmk's own output and the run sequence
+
+TeX logs parse best when written with a huge max_print_line (texi sets it) and
+-file-line-error, but classic 79-column wrapped logs, CRLF files and truncated
+files are handled too. No parser raises on bad input.
 """
 
 import re
-from dataclasses import dataclass, field
-from typing import Literal
+from collections.abc import Sequence
 
-Kind = Literal["error", "warning", "box"]
-
-_FILE_EXTS = (
-    ".tex",
-    ".sty",
-    ".cls",
-    ".bbx",
-    ".cbx",
-    ".def",
-    ".cfg",
-    ".ltx",
-    ".fd",
-    ".clo",
-    ".lbx",
-    ".bib",
+from texi.logparse_bib import BibLogInfo, BibResult, parse_bib, parse_blg
+from texi.logparse_core import (
+    BuildResult,
+    Diagnostic,
+    Kind,
+    LatexmkInfo,
+    ParseResult,
+    RuleRun,
+    TexLogInfo,
 )
-# `./main.tex:12: message` (-file-line-error)
-_FLE = re.compile(
-    r"^((?:\./|/|\w)[^\s:]*?(?:"
-    + "|".join(map(re.escape, _FILE_EXTS))
-    + r")):(\d+): (.*)$"
+from texi.logparse_index import IndexLogInfo, IndexResult, parse_index
+from texi.logparse_latexmk import (
+    EXIT_CODES,
+    LatexmkResult,
+    parse_latexmk,
+    run_sequence,
 )
-_BANG = re.compile(r"^! (.*)$")
-_CONTEXT = re.compile(r"^l\.(\d+)\s?(.*)$")
-_WARNING = re.compile(
-    r"^((?:LaTeX(?: Font)?|Package \S+|Class \S+|pdfTeX|LuaTeX|Module \S+)) [Ww]arning: (.*)$"
-)
-_CONT = re.compile(r"^\((?:[^)\s]+)\)\s+(.*)$")  # `(pkg)   more text`
-_BOX = re.compile(r"^((?:Overfull|Underfull) \\[hv]box .*)$")
-_MISSING_CHAR = re.compile(r"^Missing character: (.*)$")
-_ON_LINE = re.compile(r"on input line (\d+)")
-_BOX_LINES = re.compile(r"at lines? (\d+)(?:--(\d+))?")
-_OPEN = re.compile(r"\(([^\s()]*)|\)")
-
-
-@dataclass
-class Diagnostic:
-    kind: Kind
-    message: str
-    file: str | None = None
-    line: int | None = None
-    context: list[str] = field(default_factory=list)
-    source: str = "tex"  # tex | bibtex | biber | latexmk
-    end_line: int | None = None  # last line of a range, e.g. a box spanning lines 7--8
-    guessed: bool = False  # line copied from an earlier diagnostic, see guess_lines
-
-    def key(self) -> tuple:
-        """Identity for de-duplication: same text in the same place."""
-        return (
-            self.kind,
-            self.source,
-            self.file,
-            self.line,
-            re.sub(r"\d+", "#", self.message),
-        )
-
-
-def _clean_path(path: str) -> str:
-    return path[2:] if path.startswith("./") else path
-
-
-class _FileStack:
-    """Best-effort tracking of which file TeX is reading, from `(path` / `)` in the log.
-
-    Only file-looking `(path` opens are pushed. A `)` only closes a file when it
-    sits where TeX prints one (line start, after `)`, `]`, `>`, a space, or right
-    after a file name); parens inside message text are ignored.
-    """
-
-    def __init__(self) -> None:
-        self.stack: list[str] = []
-
-    def feed(self, line: str) -> None:
-        opened_end = -1
-        for m in _OPEN.finditer(line):
-            if m.group(1) is not None:
-                if m.group(1).startswith(("/", "./", "../")) or m.group(1).endswith(
-                    _FILE_EXTS
-                ):
-                    self.stack.append(m.group(1))
-                    opened_end = m.end()
-            elif self.stack:
-                before = line[m.start() - 1] if m.start() else "\n"
-                if before in "\n)]> " or m.start() == opened_end:
-                    self.stack.pop()
-
-    @property
-    def current(self) -> str | None:
-        return self.stack[-1] if self.stack else None
-
-    @property
-    def current_tex(self) -> str | None:
-        """Innermost .tex file (what the user wrote), else the innermost file."""
-        return next(
-            (f for f in reversed(self.stack) if f.endswith(".tex")), self.current
-        )
-
-
-def parse_tex_log(text: str) -> list[Diagnostic]:
-    """Errors, warnings and box warnings from a TeX engine log."""
-    out: list[Diagnostic] = []
-    lines = text.splitlines()
-    files = _FileStack()
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        i += 1
-
-        if m := _FLE.match(line):
-            diag = Diagnostic(
-                "error", m.group(3), _clean_path(m.group(1)), int(m.group(2))
-            )
-            i = _read_error_context(lines, i, diag)
-            out.append(diag)
-            continue
-        if m := _BANG.match(line):
-            diag = Diagnostic(
-                "error",
-                m.group(1).strip(),
-                files.current and _clean_path(files.current),
-            )
-            i = _read_error_context(lines, i, diag)
-            out.append(diag)
-            continue
-        if m := _WARNING.match(line):
-            msg = m.group(2)
-            cont_start = i
-            # A warning runs until the next blank line: `(pkg)   text` or indented lines
-            while i < len(lines) and lines[i].strip() and i - cont_start < 8:
-                c = _CONT.match(lines[i])
-                msg += " " + (c.group(1) if c else lines[i].strip())
-                i += 1
-            ln = _ON_LINE.search(msg)
-            msg = _ON_LINE.sub("", msg).rstrip(" .") or msg
-            where = (
-                files.current if ln else files.current_tex
-            )  # a line number refers to the innermost file
-            out.append(
-                Diagnostic(
-                    "warning",
-                    f"{m.group(1)}: {msg}",
-                    where and _clean_path(where),
-                    int(ln.group(1)) if ln else None,
-                )
-            )
-            continue
-        if m := _BOX.match(line):
-            ln = _BOX_LINES.search(line)
-            out.append(
-                Diagnostic(
-                    "box",
-                    m.group(1),
-                    files.current and _clean_path(files.current),
-                    int(ln.group(1)) if ln else None,
-                    end_line=int(ln.group(2)) if ln and ln.group(2) else None,
-                )
-            )
-            continue
-        if m := _MISSING_CHAR.match(line):
-            out.append(
-                Diagnostic(
-                    "warning",
-                    f"Missing character: {m.group(1)}",
-                    files.current and _clean_path(files.current),
-                )
-            )
-            continue
-        if not _CONT.match(line):  # `(pkg)` continuation lines aren't file opens
-            files.feed(line)
-    return out
-
-
-def _read_error_context(lines: list[str], i: int, diag: Diagnostic) -> int:
-    """Consume the help text and `l.NN ...` context TeX prints after an error.
-
-    Fills in the line number if it wasn't known. Stops at the context line or
-    at the start of the next diagnostic.
-    """
-    for _ in range(12):
-        if i >= len(lines):
-            break
-        nxt = lines[i]
-        if (
-            _BANG.match(nxt)
-            or _FLE.match(nxt)
-            or _WARNING.match(nxt)
-            or _BOX.match(nxt)
-        ):
-            break
-        if m := _CONTEXT.match(nxt):
-            diag.line = diag.line or int(m.group(1))
-            diag.context.append(nxt.replace("^^M", "").strip())
-            i += 1
-            if (
-                i < len(lines)
-                and lines[i].strip()
-                and not lines[i].startswith(("?", "!"))
-            ):
-                diag.context.append(
-                    lines[i].replace("^^M", "").strip()
-                )  # the rest of the source line
-                i += 1
-            break
-        i += 1
-    return i
-
-
-_BLG = re.compile(r"^(?:\[\d+\] \S+> )?(ERROR|WARN) - (.*)$")
-_BIBTEX_WARN = re.compile(r"^Warning--(.*)$")
-_BIBTEX_ERR = re.compile(r"^(I couldn't open .*|I found no .*|.*---.*)$")
-
-
-def parse_blg(text: str, program: str = "biber") -> list[Diagnostic]:
-    """Warnings/errors from a biber or bibtex .blg log."""
-    out: list[Diagnostic] = []
-    for line in text.splitlines():
-        if m := _BLG.match(line):
-            kind: Kind = "error" if m.group(1) == "ERROR" else "warning"
-            out.append(Diagnostic(kind, m.group(2).strip(), source=program))
-        elif program == "bibtex" and (m := _BIBTEX_WARN.match(line)):
-            out.append(Diagnostic("warning", m.group(1).strip(), source="bibtex"))
-        elif program == "bibtex" and (m := _BIBTEX_ERR.match(line)) and "---" in line:
-            out.append(Diagnostic("error", line.strip(), source="bibtex"))
-    return out
-
+from texi.logparse_tex import parse_tex, parse_tex_log
 
 _MISSING_FILE = re.compile(r"File [`']([^'`]+?)(\.sty|\.cls)?' not found")
 
 
 def missing_package(diag: Diagnostic) -> str | None:
     """Name of a missing .sty/.cls from a `File 'x.sty' not found` error, if that's what this is."""
-    m = _MISSING_FILE.search(diag.message)
+    m = _MISSING_FILE.search(diag.message[:4000])
     return m.group(1) if m and m.group(2) else None
 
 
@@ -268,3 +69,82 @@ def guess_lines(diags: list[Diagnostic]) -> None:
             last[d.file] = d.line
         elif d.file in last:
             d.line, d.guessed = last[d.file], True
+
+
+def _as_list(x: str | Sequence[str] | None) -> list[str]:
+    if x is None:
+        return []
+    return [x] if isinstance(x, str) else list(x)
+
+
+def parse_build(
+    *,
+    tex_log: str | Sequence[str] | None = None,
+    blg: str | Sequence[str] | None = None,
+    blg_program: str | None = None,
+    ilg: str | Sequence[str] | None = None,
+    latexmk_output: str | None = None,
+    latexmk_exit_code: int | None = None,
+    include_info: bool = False,
+) -> BuildResult:
+    """Combine the logs of one build into diagnostics plus run facts.
+
+    Pass whichever texts you have (`tex_log`, `blg` and `ilg` may each be one
+    text or several, e.g. one per main file; `.glg` goes through `ilg`).
+    Diagnostics come out in this order: TeX, bibliography, index, latexmk.
+
+    latexmk's own diagnostics (missing source file, too many passes, a rule that
+    failed, rc-file errors) are only added when the tool logs hold no error, so
+    a real TeX error is never buried under "latexmk failed". Without a `tex_log`
+    the engine output embedded in `latexmk_output` is parsed instead.
+    """
+    result = BuildResult()
+    tex_texts = _as_list(tex_log)
+    for t in tex_texts:
+        r = parse_tex(t, include_info=include_info)
+        result.diagnostics += r.diagnostics
+        result.tex = r.info
+    for t in _as_list(blg):
+        result.diagnostics += parse_bib(t, blg_program).diagnostics
+    for t in _as_list(ilg):
+        result.diagnostics += parse_index(t).diagnostics
+    if latexmk_output is not None:
+        lm = parse_latexmk(
+            latexmk_output,
+            exit_code=latexmk_exit_code,
+            engine_output=not tex_texts,
+        )
+        result.latexmk = lm.info
+        if result.tex is None and lm.tex_runs:
+            result.tex = lm.tex_runs[-1]
+        if not result.errors:
+            result.diagnostics += lm.diagnostics
+    return result
+
+
+__all__ = [
+    "EXIT_CODES",
+    "BibLogInfo",
+    "BibResult",
+    "BuildResult",
+    "Diagnostic",
+    "IndexLogInfo",
+    "IndexResult",
+    "Kind",
+    "LatexmkInfo",
+    "LatexmkResult",
+    "ParseResult",
+    "RuleRun",
+    "TexLogInfo",
+    "dedupe",
+    "guess_lines",
+    "missing_package",
+    "parse_bib",
+    "parse_blg",
+    "parse_build",
+    "parse_index",
+    "parse_latexmk",
+    "parse_tex",
+    "parse_tex_log",
+    "run_sequence",
+]

@@ -11,3 +11,4 @@ wheels/
 .texenv
 example
 site/
+example_other/

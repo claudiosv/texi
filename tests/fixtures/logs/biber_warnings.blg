@@ -1,0 +1,15 @@
+[0] Config.pm:329> INFO - This is Biber 2.19
+[0] Config.pm:332> INFO - Logfile is 'main.blg'
+[42] biber:340> INFO - === Mon Jan 01, 2024, 12:00:00
+[63] Biber.pm:432> INFO - Reading 'main.bcf'
+[96] Biber.pm:998> INFO - Found 3 citekeys in bib section 0
+[100] Biber.pm:1000> INFO - Processing section 0
+[110] Biber.pm:1100> INFO - Looking for bibtex format file 'refs.bib' for section 0
+[120] bibtex.pm:200> INFO - Found BibTeX data source 'refs.bib'
+[130] Utils.pm:411> WARN - Duplicate entry key 'smith' in file 'refs.bib', skipping ...
+[131] Utils.pm:411> WARN - Datamodel: Entry 'doe2020' (refs.bib): Invalid field 'foo' for entrytype 'article'
+[140] Utils.pm:411> WARN - Datamodel: Entry 'doe2020' (refs.bib): Missing mandatory field 'journaltitle'
+[150] Utils.pm:411> WARN - I didn't find a database entry for 'ghost' (section 0)
+[160] Utils.pm:411> WARN - Overwriting field 'year' with year part of field 'date' for entry 'smith'
+[165] Utils.pm:411> WARN - Possible typo at line 12 in entry 'smith'
+[170] Biber.pm:137> INFO - WARNINGS: 6

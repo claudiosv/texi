@@ -1,0 +1,30 @@
+# Fdb version 4
+["makeindex main.idx"] 1794431787.26215 "main.idx" "main.ind" "main" 1794431787.52417 0
+  "main.idx" 1794431787.51743 21 43c5fec0a730fb1b6b984223ddd664fc "pdflatex"
+  (generated)
+  "main.ilg"
+  "main.ind"
+  (rewritten before read)
+["pdflatex"] 1794431787.46581 "main.tex" "main.pdf" "main" 1794431787.52424 0
+  "/home/user/Library/texlive/2026basic/texmf-var/fonts/map/pdftex/updmap/pdftex.map" 1793758335 79211 820ffa8c2d5022be7da15fa31c29bd91 ""
+  "/usr/local/texlive/2026basic/texmf-dist/fonts/tfm/public/cm/cmbx12.tfm" 1136768653 1324 c910af8c371558dc20f2d7822f66fe64 ""
+  "/usr/local/texlive/2026basic/texmf-dist/fonts/tfm/public/cm/cmr12.tfm" 1136768653 1288 655e228510b4c2a1abe905c368440826 ""
+  "/usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx12.pfb" 1248133631 32080 340ef9bf63678554ee606688e7b5339d ""
+  "/usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10.pfb" 1248133631 35752 024fb6c41858982481f6968b5fc26508 ""
+  "/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/article.cls" 1793389839 20144 c320f103d647f141332f1a6594e2527e ""
+  "/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/makeidx.sty" 1780258940 1939 3e9bd9a6790c8257b8463d4fed677d79 ""
+  "/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/size10.clo" 1793389839 8448 93d85e09d64a9c5cb1da080f76df8f37 ""
+  "/usr/local/texlive/2026basic/texmf-dist/tex/latex/l3kernel/l3backend-pdftex.def" 1790017662 31824 60c8410f6fc024f189369cb45fa634af ""
+  "/usr/local/texlive/2026basic/texmf-dist/web2c/texmf.cnf" 1782667392 43815 bcd8835056a2dfac260166a1c9541261 ""
+  "/usr/local/texlive/2026basic/texmf-var/web2c/pdftex/pdflatex.fmt" 1793580339 2993256 a65c3024c4fa0ae2282e9fc414840c8e ""
+  "/usr/local/texlive/2026basic/texmf.cnf" 1772405582 628 bbc09d6d38872d53c11bb48dc9b14e88 ""
+  "main.aux" 1794431787.51719 32 044b7f8fc9779af7531264e0c5c84b6d "pdflatex"
+  "main.ind" 1794431787.40605 50 f2548aae8913a513471786be603d32bd "makeindex main.idx"
+  "main.tex" 1794431786.44815 114 4d4b613a0f63f175452cf754eb9ff0b5 ""
+  (generated)
+  "main.aux"
+  "main.fls"
+  "main.idx"
+  "main.log"
+  "main.pdf"
+  (rewritten before read)

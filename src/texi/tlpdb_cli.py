@@ -75,30 +75,9 @@ def _fail(msg: str) -> typer.Exit:
     return typer.Exit(code=1)
 
 
-def _project_repository() -> str | None:
-    """``[project] repository`` of the texproject.toml in the cwd, if any."""
-    cfg = Path.cwd() / "texproject.toml"
-    if not cfg.is_file():
-        return None
-    from texi.cli import load_project_config
-
-    try:
-        return load_project_config(cfg).project.repository
-    except typer.Exit:
-        return None
-
-
 def resolve_repository(repository: str | None) -> tuple[str, str]:
     """Pick the repository; returns it and where the choice came from."""
-    if repository:
-        return tl.normalize_repository(repository), "--repository"
-    proj = _project_repository()
-    if proj:
-        return tl.normalize_repository(proj), "texproject.toml"
-    tlmgr = tl.tlmgr_repository()
-    if tlmgr:
-        return tlmgr, "tlmgr option repository"
-    return tl.DEFAULT_REPOSITORY, "default"
+    return tl.resolve_repository(repository, Path.cwd())
 
 
 def _load(
@@ -174,6 +153,10 @@ def _print_stats(db: tl.Tlpdb) -> None:
     if db.compressed_bytes is not None:
         rows.append(("Compressed", _fmt_bytes(db.compressed_bytes)))
     rows.append(("Unpacked", _fmt_bytes(db.size_bytes)))
+    if db.index_path:
+        rows.append(("Index", str(db.index_path)))
+        rows.append(("Schema version", str(db.schema_version)))
+        rows.append(("Index size", _fmt_bytes(db.index_size)))
     rows.append(("Entries", f"{st.entries:,}"))
     if st.release:
         rel = f"TeX Live {st.release}"
@@ -323,20 +306,17 @@ def _lookup(db: tl.Tlpdb, name: str) -> list[tl.TlPackage]:
     by_cat = db.by_catalogue(name)
     if by_cat:
         return by_cat
-    lowered = {n.lower(): n for n in db.packages}
+    names = db.names()
+    lowered = {n.lower(): n for n in names}
     if name.lower() in lowered:
-        return [db.packages[lowered[name.lower()]]]
-    close = difflib.get_close_matches(name, list(db.packages), n=5, cutoff=0.6)
-    for p in db.packages.values():
-        if p.catalogue_key and p.catalogue_key not in close:
-            if (
-                len(close) < 5
-                and difflib.SequenceMatcher(
-                    None, name.lower(), p.catalogue_key.lower()
-                ).ratio()
-                > 0.85
-            ):
-                close.append(p.name)
+        pkg = db.get(lowered[name.lower()])
+        if pkg:
+            return [pkg]
+    close = difflib.get_close_matches(name, names, n=5, cutoff=0.6)
+    for cat, pname in db.catalogue_keys():
+        if cat not in close and len(close) < 5:
+            if difflib.SequenceMatcher(None, name.lower(), cat.lower()).ratio() > 0.85:
+                close.append(pname)
     msg = f"No TeX Live package or CTAN key named '{name}'."
     if close:
         msg += " Did you mean: " + ", ".join(close[:5]) + "?"
@@ -353,8 +333,13 @@ _CONTAINER = (
 def _print_info(
     db: tl.Tlpdb, p: tl.TlPackage, *, show_files: bool, all_files: bool
 ) -> None:
+    relocatable = bool(p.first("relocated"))
     console.print(
-        Text.assemble((p.name, "bold cyan"), f"  {p.category}  r{p.revision}")
+        Text.assemble(
+            (p.name, "bold cyan"),
+            f"  {p.category}  r{p.revision}  ",
+            ("(Relocatable)", "green") if relocatable else ("(Not relocatable)", "dim"),
+        )
     )
     if p.shortdesc:
         console.print(Text(p.shortdesc, style="bold"))
@@ -374,13 +359,16 @@ def _print_info(
         if k == "catalogue-ctan":
             value += f"  (https://ctan.org/tex-archive{p.fields[k][0]})"
         rows.append((label, value))
-    if p.first("relocated"):
-        rows.append(("Relocated", p.first("relocated") or ""))
     _kv(rows)
     console.print()
     if p.depends:
         console.print(f"[bold]Depends[/bold] ({len(p.depends)})")
         console.print(Text("  " + ", ".join(p.depends)))
+        console.print()
+    if p.settings:
+        console.print(f"[bold]Settings[/bold] ({len(p.settings)})")
+        for line in p.settings:
+            console.print(Text("  " + line))
         console.print()
     crow: list[tuple[str, str]] = []
     for prefix, label in _CONTAINER:

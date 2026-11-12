@@ -1,0 +1,65 @@
+Rc files read (in order):
+  NONE
+Latexmk: This is Latexmk, John Collins, 8 November 2026. Version 4.89.
+No existing .aux file, so I'll make a simple one, and require run of *latex.
+Latexmk: applying rule 'pdflatex'...
+Rule 'pdflatex':  Reasons for rerun
+Category 'other':
+  Rerun of 'pdflatex' forced or previously required:
+    Reason or flag: 'Initial setup'
+
+------------
+Run number 1 of rule 'pdflatex'
+------------
+------------
+Running 'pdflatex  -interaction=nonstopmode -file-line-error -recorder  "main.tex"'
+------------
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex)
+ restricted \write18 enabled.
+entering extended mode
+(./main.tex
+LaTeX2e <2026-11-01>
+L3 programming layer <2026-09-09>
+(/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/article.cls
+Document Class: article 2026-06-04 v1.4n Standard LaTeX document class
+(/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/size10.clo)) (/usr/local/texlive/2026basic/texmf-dist/tex/latex/l3kernel/l3backend-pdftex.def) (./main.aux)
+
+LaTeX Warning: Reference `nolabel' on page 1 undefined on input line 3.
+
+./main.tex:3: Undefined control sequence.
+l.3 \section{A} See \ref{nolabel}. \foo
+                                       
+
+! LaTeX Error: File `nope.tex' not found.
+
+Type X to quit or <RETURN> to proceed,
+or enter new name. (Default extension: tex)
+
+Enter file name: 
+./main.tex:4: Emergency stop.
+<read *> 
+         
+l.4 \input{nope}
+                ^^M
+./main.tex:4:  ==> Fatal error occurred, no output PDF file produced!
+Transcript written on main.log.
+Latexmk: Getting log file 'main.log'
+Latexmk: Examining 'main.fls'
+Latexmk: Examining 'main.log'
+Latexmk: Missing input file 'nope.tex' message in .log file:
+  ! LaTeX Error: File `nope.tex' not found.
+Latexmk: Summary of warnings from last run of *latex:
+  Latex failed to resolve 1 reference(s)
+Latexmk: ====Problematic refs and citations with line #s in .tex file:
+  Reference `nolabel' on page 1 undefined on input line 3
+Latexmk: Errors, so I did not complete making targets
+Collected error summary (may duplicate other messages):
+  pdflatex: Command for 'pdflatex' gave return code 1
+      Refer to 'main.log' and/or above output for details
+
+Latexmk: Sometimes, the -f option can be used to get latexmk
+  to try to force complete processing.
+  But normally, you will need to correct the file(s) that caused the
+  error, and then rerun latexmk.
+  In some cases, it is best to clean out generated files before rerunning
+  latexmk after you've corrected the files.

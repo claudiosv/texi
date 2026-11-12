@@ -1,0 +1,28 @@
+# Fdb version 4
+["xdvipdfmx"] 1794431794.25706 "main.xdv" "main.pdf" "main" 1794431794.37274 0
+  "main.xdv" 1794431794.23395 908 01d43341e48885513e1a428dc69d11e5 "xelatex"
+  (generated)
+  "main.pdf"
+  (rewritten before read)
+["xelatex"] 1794431794.10529 "main.tex" "main.xdv" "main" 1794431794.37259 2
+  "/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/article.cls" 1793389839 20144 c320f103d647f141332f1a6594e2527e ""
+  "/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/size10.clo" 1793389839 8448 93d85e09d64a9c5cb1da080f76df8f37 ""
+  "/usr/local/texlive/2026basic/texmf-dist/tex/latex/graphics-cfg/graphics.cfg" 1465944070 1224 978390e9c2234eab29404bc21b268d1e ""
+  "/usr/local/texlive/2026basic/texmf-dist/tex/latex/graphics-def/xetex.def" 1762027770 14788 68cddb076430acc268ef4203b6523355 ""
+  "/usr/local/texlive/2026basic/texmf-dist/tex/latex/graphics/graphics.sty" 1780258940 18585 02393ee85dc80955e05e568e02814a7c ""
+  "/usr/local/texlive/2026basic/texmf-dist/tex/latex/graphics/graphicx.sty" 1793389839 8118 9513710565d64a8399170d659c0d594d ""
+  "/usr/local/texlive/2026basic/texmf-dist/tex/latex/graphics/keyval.sty" 1793389839 2671 50d0b16dcfca8c1d0a4654ba4cffe1db ""
+  "/usr/local/texlive/2026basic/texmf-dist/tex/latex/graphics/trig.sty" 1780258940 4023 5a4fcfe68d7c6df02f94d7bf578e99fd ""
+  "/usr/local/texlive/2026basic/texmf-dist/tex/latex/l3kernel/l3backend-xetex.def" 1790017662 33523 d4ce877227508ac5ee194968a4ca10a8 ""
+  "/usr/local/texlive/2026basic/texmf-dist/web2c/texmf.cnf" 1782667392 43815 bcd8835056a2dfac260166a1c9541261 ""
+  "/usr/local/texlive/2026basic/texmf-var/web2c/xetex/xelatex.fmt" 1793580340 5478066 14d071b7ac723b7f1a3a206ba28ae086 ""
+  "/usr/local/texlive/2026basic/texmf.cnf" 1772405582 628 bbc09d6d38872d53c11bb48dc9b14e88 ""
+  "example-image" 0 -1 0 ""
+  "main.aux" 1794431794.23363 32 3985256e7290058c681f74d7a3565a19 "xelatex"
+  "main.tex" 1794431786.45493 125 7a6cb3560632f81dd4d7603d0e59852b ""
+  (generated)
+  "main.aux"
+  "main.fls"
+  "main.log"
+  "main.xdv"
+  (rewritten before read)

@@ -1,0 +1,2 @@
+Input index file missing.idx not found.
+Usage: makeindex [-ilqrcgLT] [-s sty] [-o ind] [-t log] [-p num] [idx0 idx1 ...]

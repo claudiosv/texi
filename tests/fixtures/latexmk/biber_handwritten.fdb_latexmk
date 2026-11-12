@@ -1,0 +1,20 @@
+# Fdb version 4
+["biber main"] 1700000003.5 "main.bcf" "main.bbl" "main" 1700000004.1 0
+  "./refs.bib" 1700000000 58 72c5a024693978195c8f16fb84ca9706 ""
+  "main.bcf" 1700000002.9 5000 0123456789abcdef0123456789abcdef "lualatex"
+  (generated)
+  "main.bbl"
+  "main.blg"
+["lualatex"] 1700000001.2 "main.tex" "build/main.pdf" "main" 1700000004.2 1
+  "/usr/share/texlive/texmf-dist/tex/latex/biblatex/biblatex.sty" 1690000000 400000 abcdef0123456789abcdef0123456789 ""
+  "/usr/share/texlive/texmf-dist/tex/latex/base/article.cls" 1690000000 20144 c320f103d647f141332f1a6594e2527e ""
+  "main.tex" 1700000000 190 0123456789abcdef0123456789abcdef ""
+  "refs.bib" 1700000000 58 72c5a024693978195c8f16fb84ca9706 ""
+  "main.bbl" 1700000004 900 0 "biber main"
+  "missing.tex" 0 -1 0 ""
+  (generated)
+  "build/main.pdf"
+  "main.bcf"
+  "main.log"
+  (rewritten before read)
+  "main.aux"

@@ -1,0 +1,8 @@
+Rc files read (in order):
+  NONE
+Latexmk: This is Latexmk, John Collins, 8 November 2026. Version 4.89.
+Latexmk: Nothing to do for 'main.tex'.
+Latexmk: All targets (main.pdf) are up-to-date
+Collected error summary (may duplicate other messages):
+  pdflatex: gave an error in previous invocation of latexmk.
+

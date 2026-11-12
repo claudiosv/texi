@@ -289,7 +289,9 @@ def test_find_texlive_follows_alias() -> None:
                 ],
             )
         if path.endswith("/pkg/pgf"):
-            return httpx2.Response(200, json={"id": "pgf", "name": "PGF", "texlive": "pgf"})
+            return httpx2.Response(
+                200, json={"id": "pgf", "name": "PGF", "texlive": "pgf"}
+            )
         return httpx2.Response(404, json={"errors": ["Not found"]})
 
     with CtanClient(transport=httpx2.MockTransport(handler), cache=False) as c:

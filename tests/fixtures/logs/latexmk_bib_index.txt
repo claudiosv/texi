@@ -1,0 +1,216 @@
+Rc files read (in order):
+  NONE
+Latexmk: This is Latexmk, John Collins, 8 November 2026. Version 4.89.
+No existing .aux file, so I'll make a simple one, and require run of *latex.
+Latexmk: applying rule 'pdflatex'...
+Rule 'pdflatex':  Reasons for rerun
+Category 'other':
+  Rerun of 'pdflatex' forced or previously required:
+    Reason or flag: 'Initial setup'
+
+------------
+Run number 1 of rule 'pdflatex'
+------------
+------------
+Running 'pdflatex  -interaction=nonstopmode -file-line-error -recorder  "main.tex"'
+------------
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex)
+ restricted \write18 enabled.
+entering extended mode
+(./main.tex
+LaTeX2e <2026-11-01>
+L3 programming layer <2026-09-09>
+(/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/article.cls
+Document Class: article 2026-06-04 v1.4n Standard LaTeX document class
+(/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/size10.clo)) (/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/makeidx.sty)
+Writing index file main.idx
+(/usr/local/texlive/2026basic/texmf-dist/tex/latex/l3kernel/l3backend-pdftex.def) (./main.aux)
+
+LaTeX Warning: Citation `good' on page 1 undefined on input line 3.
+
+
+LaTeX Warning: Citation `nojournal' on page 1 undefined on input line 3.
+
+
+LaTeX Warning: Citation `absent' on page 1 undefined on input line 3.
+
+No file main.bbl.
+No file main.ind.
+[1{/Users/claudio/Library/texlive/2026basic/texmf-var/fonts/map/pdftex/updmap/pdftex.map}] (./main.aux)
+
+LaTeX Warning: There were undefined references.
+
+ )</usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx10.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10.pfb>
+Output written on main.pdf (1 page, 22943 bytes).
+Transcript written on main.log.
+Latexmk: Getting log file 'main.log'
+Latexmk: Examining 'main.fls'
+Latexmk: Examining 'main.log'
+Latexmk: Missing bbl file 'main.bbl' in following:
+ No file main.bbl.
+Latexmk: Missing input file 'main.ind' message in .log file:
+  No file main.ind.
+Latexmk: Log file says output to 'main.pdf'
+Latexmk: Index file 'main.idx' was written
+Latexmk: Using bibtex to make bibliography file(s).
+  ===Source file 'main.bbl' for 'pdflatex'
+Latexmk: Creating rule bibtex main
+Latexmk: Found bibliography file(s):
+  ./refs.bib
+Latexmk: applying rule 'makeindex main.idx'...
+Rule 'makeindex main.idx':  Reasons for rerun
+Category 'other':
+  Rerun of 'makeindex main.idx' forced or previously required:
+    Reason or flag: 'Initial set up of rule'
+
+------------
+Run number 1 of rule 'makeindex main.idx'
+------------
+------------
+Running 'makeindex  -o "main.ind" "main.idx"'
+------------
+This is makeindex, version 2.18 [TeX Live 2026] (kpathsea + Thai support).
+Scanning input file main.idx....done (1 entries accepted, 0 rejected).
+Sorting entries...done (0 comparisons).
+Generating output file main.ind....done (5 lines written, 0 warnings).
+Output written in main.ind.
+Transcript written in main.ilg.
+Latexmk: applying rule 'bibtex main'...
+Rule 'bibtex main':  Reasons for rerun
+Category 'other':
+  Rerun of 'bibtex main' forced or previously required:
+    Reason or flag: 'Initial set up of rule'
+
+------------
+Run number 1 of rule 'bibtex main'
+------------
+------------
+Running 'env -u max_print_line -u error_line -u half_error_line bibtex  "main"'
+------------
+This is BibTeX, Version 0.99e (TeX Live 2026)
+The top-level auxiliary file: main.aux
+The style file: plain.bst
+Database file #1: refs.bib
+Warning--I didn't find a database entry for "absent"
+Warning--empty journal in nojournal
+(There were 2 warnings)
+Latexmk: applying rule 'pdflatex'...
+Rule 'pdflatex':  Reasons for rerun
+Changed files or newly in use/created:
+  main.aux
+  main.bbl
+  main.ind
+
+------------
+Run number 2 of rule 'pdflatex'
+------------
+------------
+Running 'pdflatex  -interaction=nonstopmode -file-line-error -recorder  "main.tex"'
+------------
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex)
+ restricted \write18 enabled.
+entering extended mode
+(./main.tex
+LaTeX2e <2026-11-01>
+L3 programming layer <2026-09-09>
+(/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/article.cls
+Document Class: article 2026-06-04 v1.4n Standard LaTeX document class
+(/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/size10.clo)) (/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/makeidx.sty)
+Writing index file main.idx
+(/usr/local/texlive/2026basic/texmf-dist/tex/latex/l3kernel/l3backend-pdftex.def) (./main.aux)
+
+LaTeX Warning: Citation `good' on page 1 undefined on input line 3.
+
+
+LaTeX Warning: Citation `nojournal' on page 1 undefined on input line 3.
+
+
+LaTeX Warning: Citation `absent' on page 1 undefined on input line 3.
+
+(./main.bbl) (./main.ind [1{/Users/claudio/Library/texlive/2026basic/texmf-var/fonts/map/pdftex/updmap/pdftex.map}] [2]) (./main.aux)
+
+LaTeX Warning: There were undefined references.
+
+
+LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.
+
+ )</usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx10.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx12.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/amsfonts/cm/cmti10.pfb>
+Output written on main.pdf (2 pages, 44157 bytes).
+Transcript written on main.log.
+Latexmk: Getting log file 'main.log'
+Latexmk: Examining 'main.fls'
+Latexmk: Examining 'main.log'
+Latexmk: Found input bbl file 'main.bbl'
+Latexmk: References changed.
+Latexmk: Log file says output to 'main.pdf'
+Latexmk: Index file 'main.idx' was written
+Latexmk: Using bibtex to make bibliography file(s).
+  ===Source file 'main.bbl' for 'pdflatex'
+Latexmk: Found bibliography file(s):
+  ./refs.bib
+Latexmk: applying rule 'bibtex main'...
+Rule 'bibtex main':  Reasons for rerun
+Changed files or newly in use/created:
+  main.aux
+
+------------
+Run number 2 of rule 'bibtex main'
+------------
+------------
+Running 'env -u max_print_line -u error_line -u half_error_line bibtex  "main"'
+------------
+This is BibTeX, Version 0.99e (TeX Live 2026)
+The top-level auxiliary file: main.aux
+The style file: plain.bst
+Database file #1: refs.bib
+Warning--I didn't find a database entry for "absent"
+Warning--empty journal in nojournal
+(There were 2 warnings)
+Latexmk: applying rule 'pdflatex'...
+Rule 'pdflatex':  Reasons for rerun
+Changed files or newly in use/created:
+  main.aux
+
+------------
+Run number 3 of rule 'pdflatex'
+------------
+------------
+Running 'pdflatex  -interaction=nonstopmode -file-line-error -recorder  "main.tex"'
+------------
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex)
+ restricted \write18 enabled.
+entering extended mode
+(./main.tex
+LaTeX2e <2026-11-01>
+L3 programming layer <2026-09-09>
+(/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/article.cls
+Document Class: article 2026-06-04 v1.4n Standard LaTeX document class
+(/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/size10.clo)) (/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/makeidx.sty)
+Writing index file main.idx
+(/usr/local/texlive/2026basic/texmf-dist/tex/latex/l3kernel/l3backend-pdftex.def) (./main.aux)
+
+LaTeX Warning: Citation `absent' on page 1 undefined on input line 3.
+
+(./main.bbl) (./main.ind [1{/Users/claudio/Library/texlive/2026basic/texmf-var/fonts/map/pdftex/updmap/pdftex.map}] [2]) (./main.aux)
+
+LaTeX Warning: There were undefined references.
+
+ )</usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx10.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx12.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10.pfb></usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/amsfonts/cm/cmti10.pfb>
+Output written on main.pdf (2 pages, 44149 bytes).
+Transcript written on main.log.
+Latexmk: Getting log file 'main.log'
+Latexmk: Examining 'main.fls'
+Latexmk: Examining 'main.log'
+Latexmk: Found input bbl file 'main.bbl'
+Latexmk: Log file says output to 'main.pdf'
+Latexmk: Index file 'main.idx' was written
+Latexmk: Using bibtex to make bibliography file(s).
+  ===Source file 'main.bbl' for 'pdflatex'
+Latexmk: Found bibliography file(s):
+  ./refs.bib
+Latexmk: Summary of warnings from last run of *latex:
+  Latex failed to resolve 1 citation(s)
+Latexmk: ====Problematic refs and citations with line #s in .tex file:
+  Citation `absent' on page 1 undefined on input line 3
+Latexmk: All targets (main.pdf) are up-to-date
+

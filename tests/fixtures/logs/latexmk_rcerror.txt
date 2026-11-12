@@ -1,0 +1,4 @@
+Latexmk: Initialization file 'bad.rc' gave an error:
+     syntax error at (eval 14) line 2, at EOF
+
+Latexmk: Stopping because of problem with rc file

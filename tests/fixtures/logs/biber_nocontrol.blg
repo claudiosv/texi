@@ -1,0 +1,5 @@
+[0] Config.pm:329> INFO - This is Biber 2.22
+[0] Config.pm:332> INFO - Logfile is 'nonexistent.blg'
+[22] biber-darwin:342> INFO - === Wed Nov 11, 2026, 13:29:07
+[35] Utils.pm:480> ERROR - Cannot find 'nonexistent.bcf'!
+[35] Biber.pm:137> INFO - ERRORS: 1

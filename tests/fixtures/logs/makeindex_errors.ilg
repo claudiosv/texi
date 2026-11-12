@@ -1,0 +1,16 @@
+This is makeindex, version 2.18 [TeX Live 2026] (kpathsea + Thai support).
+Scanning input file bad.idx....
+!! Input index error (file = bad.idx, line = 4):
+   -- Incomplete first argument (premature LFD).
+!! Input index error (file = bad.idx, line = 5):
+   -- Illegal null field.
+!! Input index error (file = bad.idx, line = 6):
+   -- Missing arguments -- need two (premature LFD).
+done (4 entries accepted, 3 rejected).
+Sorting entries....done (9 comparisons).
+Generating output file bad.ind....
+## Warning (input = bad.idx, line = 3; output = bad.ind, line = 4):
+   -- Unmatched range opening operator (.
+done (10 lines written, 1 warning).
+Output written in bad.ind.
+Transcript written in bad.ilg.

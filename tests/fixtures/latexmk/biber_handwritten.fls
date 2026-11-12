@@ -1,0 +1,14 @@
+PWD /home/user/my proj
+INPUT /usr/share/texlive/texmf.cnf
+INPUT main.tex
+OUTPUT build/main.log
+INPUT /usr/share/texlive/texmf-dist/tex/latex/base/article.cls
+INPUT /usr/share/texlive/texmf-dist/tex/latex/biblatex/biblatex.sty
+INPUT ./refs.bib
+INPUT ./refs.bib
+OUTPUT main.bcf
+OUTPUT main.aux
+INPUT main.aux
+INPUT sections/intro chapter.tex
+INPUT /home/user/other/shared.tex
+OUTPUT build/main.pdf

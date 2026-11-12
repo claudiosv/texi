@@ -52,10 +52,14 @@ nav:
   - API Reference:
       - Overview: api/index.md
       - pdffonts: api/pdffonts.md
+      - latexmk_files: api/latexmk_files.md
       - ctan: api/ctan.md
       - logparse: api/logparse.md
       - config: api/config.md
       - tlpdb: api/tlpdb.md
+      - resolver: api/resolver.md
+      - archive: api/archive.md
+      - tlactions: api/tlactions.md
   - Roadmap: roadmap.md
 
 plugins:

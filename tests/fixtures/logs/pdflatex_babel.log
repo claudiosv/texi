@@ -1,0 +1,120 @@
+This is pdfTeX, Version 3.141592653-2.6-1.40.29 (TeX Live 2026) (preloaded format=pdflatex 2026.11.1)  11 NOV 2026 13:29
+entering extended mode
+ restricted \write18 enabled.
+ file:line:error style messages enabled.
+ %&-line parsing enabled.
+**babel.tex
+(./babel.tex
+LaTeX2e <2026-11-01>
+L3 programming layer <2026-09-09>
+(/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/article.cls
+Document Class: article 2026-06-04 v1.4n Standard LaTeX document class
+(/usr/local/texlive/2026basic/texmf-dist/tex/latex/base/size10.clo
+File: size10.clo 2026-06-04 v1.4n Standard LaTeX file (size option)
+)
+\c@part=\count276
+\c@section=\count277
+\c@subsection=\count278
+\c@subsubsection=\count279
+\c@paragraph=\count280
+\c@subparagraph=\count281
+\c@figure=\count282
+\c@table=\count283
+\abovecaptionskip=\skip49
+\belowcaptionskip=\skip50
+\bibindent=\dimen150
+) (/usr/local/texlive/2026basic/texmf-dist/tex/generic/babel/babel.sty
+Package: babel 2026/10/29 v26.15 The multilingual framework for LuaLaTeX, pdfLaTeX and XeLaTeX
+\babel@savecnt=\count284
+LaTeX Encoding Info:    Redeclaring text command \ij (encoding OT1) on input line 2100.
+LaTeX Encoding Info:    Redeclaring text command \IJ (encoding OT1) on input line 2102.
+LaTeX Encoding Info:    Redeclaring text command \ij (encoding T1) on input line 2104.
+LaTeX Encoding Info:    Redeclaring text command \IJ (encoding T1) on input line 2105.
+LaTeX Encoding Info:    Ignoring declaration for text command \ij (encoding ?) on input line 2106.
+LaTeX Encoding Info:    Ignoring declaration for text command \IJ (encoding ?) on input line 2108.
+LaTeX Encoding Info:    Ignoring declaration for text command \SS (encoding ?) on input line 2133.
+\U@D=\dimen151
+\l@unhyphenated=\language23
+ (/usr/local/texlive/2026basic/texmf-dist/tex/generic/babel/txtbabel.def)
+\bbl@readstream=\read2
+\bbl@dirlevel=\count285
+Package babel Info: You haven't specified a language as a class or package
+(babel)             option. I'll load 'nil'. Reported on input line 4409.
+Package babel Info: Importing font and identification data for 'nil'
+(babel)             from babel-und-x-nil.ini. Reported on input line 4478.
+ (/usr/local/texlive/2026basic/texmf-dist/tex/generic/babel/nil.ldf
+Language: nil 2026/10/29 v26.15 Nil language
+\l@nil=\language24
+) (/usr/local/texlive/2026basic/texmf-dist/tex/generic/babel/errbabel.def)
+
+/usr/local/texlive/2026basic/texmf-dist/tex/generic/babel/babel.sty:4481: Package babel Error: Unknown option 'klingon'.
+(babel)                Suggested actions:
+(babel)                * Make sure you haven't misspelled it
+(babel)                * Check in the babel manual that it's supported
+(babel)                * If supported and it's a language, you may
+(babel)                  need in some distributions a separate
+(babel)                  installation
+(babel)                * If installed, check there isn't an old
+(babel)                  version of the required files in your system
+(babel)                * If it's an unsupported language, create it with
+(babel)                  \babelprovide (see the manual).
+
+See the babel package documentation for explanation.
+Type  H <return>  for immediate help.
+ ... it with\\\space \space \string \babelprovide \space (see the manual).
+
+See the babel package documentation for explanation.
+Type  H <return>  for immediate help\@err@                                                                   
+                                                                                                                                                                                                                                              
+l.4481 \bbl@exp
+               {%
+Valid options are, among others: shorthands=, KeepShorthandsActive,
+activeacute, activegrave, noconfigs, safe=, main=, math=
+headfoot=, strings=, config=, hyphenmap=, or a language name.
+
+) (/usr/local/texlive/2026basic/texmf-dist/tex/latex/l3kernel/l3backend-pdftex.def
+File: l3backend-pdftex.def 2026-09-09 L3 backend support: PDF output (pdfTeX)
+\l__color_backend_stack_int=\count286
+)
+No file pdflatex_babel.aux.
+\openout1 = `pdflatex_babel.aux'.
+
+LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 3.
+LaTeX Font Info:    ... okay on input line 3.
+LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 3.
+LaTeX Font Info:    ... okay on input line 3.
+LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 3.
+LaTeX Font Info:    ... okay on input line 3.
+LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 3.
+LaTeX Font Info:    ... okay on input line 3.
+LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 3.
+LaTeX Font Info:    ... okay on input line 3.
+LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 3.
+LaTeX Font Info:    ... okay on input line 3.
+LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 3.
+LaTeX Font Info:    ... okay on input line 3.
+Package babel Info: Main language set to 'nil'.
+[1
+
+{/Users/claudio/Library/texlive/2026basic/texmf-var/fonts/map/pdftex/updmap/pdftex.map}] (./pdflatex_babel.aux)
+ ***********
+LaTeX2e <2026-11-01>
+L3 programming layer <2026-09-09>
+ ***********
+ ) 
+Here is how much of TeX's memory you used:
+ 1738 strings out of 468449
+ 35077 string characters out of 5439303
+ 454783 words of memory out of 5000000
+ 31058 multiletter control sequences out of 15000+600000
+ 628489 words of font info for 40 fonts, out of 8000000 for 9000
+ 319 hyphenation exceptions out of 8191
+ 38i,5n,44p,151b,124s stack positions out of 10000i,1000n,20000p,200000b,200000s
+</usr/local/texlive/2026basic/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10.pfb>
+Output written on pdflatex_babel.pdf (1 page, 11522 bytes).
+PDF statistics:
+ 13 PDF objects out of 1000 (max. 8388607)
+ 7 compressed objects within 1 object stream
+ 0 named destinations out of 1000 (max. 500000)
+ 1 words of extra memory for PDF output out of 10000 (max. 10000000)
+

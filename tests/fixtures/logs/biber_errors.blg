@@ -1,0 +1,13 @@
+[0] Config.pm:329> INFO - This is Biber 2.19
+[0] Config.pm:332> INFO - Logfile is 'main.blg'
+[63] Biber.pm:432> INFO - Reading 'main.bcf'
+[96] Biber.pm:998> INFO - Found 2 citekeys in bib section 0
+[110] Biber.pm:1100> INFO - Looking for bibtex format file 'refs.bib' for section 0
+[120] bibtex.pm:200> INFO - Found BibTeX data source 'refs.bib'
+[130] Utils.pm:411> ERROR - BibTeX subsystem: /tmp/par-abc/biber_tmp/refs.bib_Ab3d.utf8, line 12, syntax error: at 'title'
+[131] Utils.pm:411> WARN - BibTeX subsystem: /tmp/par-abc/biber_tmp/refs.bib_Ab3d.utf8, line 8, warning: 1 characters of junk seen at toplevel
+[140] Utils.pm:411> ERROR - Data source 'missing.bib' not found in section 0
+[141] Utils.pm:411> ERROR - Could not open 'refs2.bib' for reading: No such file or directory
+[150] Biber.pm:137> INFO - ERRORS: 3
+[151] Biber.pm:137> INFO - WARNINGS: 1
+[152] Utils.pm:411> FATAL - Cannot continue: no usable data sources

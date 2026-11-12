@@ -1,0 +1,7 @@
+Rc files read (in order):
+  NONE
+Latexmk: This is Latexmk, John Collins, 8 November 2026. Version 4.89.
+
+------------
+Latexmk: Could not find file 'main2.tex'.
+-- Use the -f option to force complete processing.

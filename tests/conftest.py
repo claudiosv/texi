@@ -18,3 +18,21 @@ def pytest_collection_modifyitems(
     for item in items:
         if "network" in item.keywords:
             item.add_marker(skip)
+
+
+@pytest.fixture(autouse=True)
+def _reset_tlmgr_guard():
+    """The tlmgr ban is per command; don't let one test's setting leak into the next."""
+    from texi import tlpdb, tools
+
+    yield
+    tools.set_forbid_tlmgr(False)
+    tlpdb.reset_system_cache()
+
+
+@pytest.fixture(autouse=True)
+def _no_retry_wait(monkeypatch: pytest.MonkeyPatch):
+    """Keep the number of download retries but not the waiting."""
+    from texi import archive
+
+    monkeypatch.setattr(archive.time, "sleep", lambda _s: None)

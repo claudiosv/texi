@@ -1,0 +1,8 @@
+Latexmk: -badarg unknown option
+Rc files read (in order):
+  NONE
+
+Latexmk: Bad options specified
+Use
+   latexmk -help
+to get usage information
