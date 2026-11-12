@@ -59,7 +59,7 @@ texi resolves the `depend` closure itself, like TeX Live's `expand_dependencies`
 
 ## `texi scan`
 
-List the packages your source files use and their TeX Live packages, based on the content of your **build logs**, and flag any missing from `texproject.toml`.
+List the packages your source files use and their TeX Live packages, and flag any missing from `texproject.toml`.
 
 | option | description |
 |---|---|

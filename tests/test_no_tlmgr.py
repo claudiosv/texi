@@ -322,7 +322,7 @@ def test_usertree_with_bin_is_not_standalone(tmp_path: Path) -> None:
     assert cli._standalone(env)
 
 
-# --- texlive_env = install / copy ---------------------------------------------------
+# --- standalone tree ---------------------------------------------------------------
 
 
 def _record(ran: list[list[str]], cmd: list[str], env: Path):  # type: ignore[no-untyped-def]

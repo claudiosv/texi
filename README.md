@@ -10,7 +10,7 @@ An isolated workspace manager for LaTeX projects.
 
 | command | what it does |
 |---|---|
-| `texi init` | Creates `texproject.toml` (`[project]` with `name` = directory name, `src_dir = "src"`), seeding `dependencies` by scanning `.tex` files for `\usepackage`/`\RequirePackage`. `--texlive usermode\|copy\|install` picks how `.texenv/` is made (see `project.texlive_env`). |
+| `texi init` | Creates `texproject.toml` (`[project]` with `name` = directory name, `src_dir = "src"`), seeding `dependencies` by scanning `.tex` files for `\usepackage`/`\RequirePackage`. |
 | `texi add <pkg>...` | Adds packages to `dependencies` and installs them. A name that isn't a TeX Live package (e.g. `binhex`) is resolved to the package that ships it (`kastrup`), asking you to confirm or choose. `--sync` runs a full sync afterwards. |
 | `texi sync` | Installs all `dependencies` into `.texenv/`, then updates them (`--no-update` to skip), and records the installed revisions in `texi.lock`. |
 | `texi build` | Generates `.latexmkrc` from the config and runs `latexmk`. `--strict` stops at the first error, `--full` forces a full rebuild (`go_mode = "full-rebuild"`), `--rm-pdf` deletes the old PDF first, `--silent` cuts the output down to errors and the final status, `--diagnostics` shows latexmk's internal decisions, `--raw` prints latexmk's full output. |
@@ -28,7 +28,7 @@ An isolated workspace manager for LaTeX projects.
 | `texi doctor` | Checks the TeX install and flags stale user-level formats. |
 | `texi formats` / `texi updmap` / `texi mktexlsr` / `texi luaotfload` | Rebuild formats, font maps, the `ls-R` filename databases (texi's own implementation, for `.texenv/`) and the LuaTeX font database (`--force` for a full rebuild). |
 | `texi outdated` | Fetch the latest package index and list what `texi sync` would update, without installing. |
-| `texi tlpdb [stats\|search\|info]` | Inspects the TeX Live package database (downloaded and cached for 24 hours, or `--local` file). `stats` shows its URI, size and contents; `search QUERY...` finds packages (`--file` also searches file names, `--regex`, `--category`, `--exact`, `--limit`); `info NAME` (or a CTAN key) prints every field and file of a package (`--no-files`, `--all-files`, `--json`). |
+| `texi cache [stats\|search\|info\|prune]` | Inspects the TeX Live package database (downloaded and cached for 24 hours, or `--local` file). `stats` shows its URI, size and contents; `search QUERY...` finds packages (`--file` also searches file names, `--regex`, `--category`, `--exact`, `--limit`); `info NAME` (or a CTAN key) prints every field and file of a package (`--no-files`, `--all-files`, `--json`). |
 
 All commands accept `--debug` where it makes sense.
 
@@ -83,7 +83,7 @@ bibtex_use = "always"
 | key | default | description |
 |---|---|---|
 | `name` | none | Project name. Used as the latexmk `$jobname` (so the PDF is `<name>.pdf`) unless `build.jobname` is set. `texi init` sets it to the directory name. |
-| `main` | `"main.tex"` | The main `.tex` file, relative to `src_dir`. `build.default_files` overrides it (and allows several). |
+| `targets` | `["main.tex"]` | The top-level `.tex` files to build, relative to `src_dir`. `build.default_files` overrides it. |
 | `texlive` | none | Expected TeX Live year, e.g. `"2026"`. texi warns if the installed year differs. |
 | `repository` | none | TeX Live repository (`tlnet`) to install from. Point it at a frozen tlnet to really pin versions. |
 | `src_dir` | `"src"` | Directory holding the `.tex` sources. the generated `.latexmkrc` sets `$do_cd = 1` and `@default_files`, so latexmk runs inside `src_dir`. Use `"."` for sources in the project root (then latexmk picks up `*.tex` itself). |
@@ -94,7 +94,7 @@ When `src_dir` is not `"."`, the generated `.latexmkrc` stays at the project roo
 - anchors `out_dir`/`aux_dir` at the project root (otherwise `-cd` would put them inside `src/`),
 - prepends `<root>/<src_dir>//` to `BIBINPUTS` and `TEXINPUTS`, so biber/bibtex running from the aux dir still find your `.bib` files.
 
-The main file is `build.default_files[0]` if set, else `project.main` (both relative to `src_dir`).
+The main file is `build.default_files[0]` if set, else the first of `project.targets` (both relative to `src_dir`).
 
 ### `[build]`
 
@@ -125,7 +125,7 @@ One flat table. The keys are grouped below by what they control.
 |---|---|---|
 | `synctex` | `true` | Add `-synctex=1` to every engine command (pdflatex, lualatex, xelatex, latex). |
 | `shell_escape` | `false` | Add `-shell-escape`. |
-| `file_line_error` | `false` | Add `-file-line-error`, so errors read `file.tex:12: message` (editors and CI can parse that). |
+| `file_line_error` | `true` | Add `-file-line-error`, so errors read `file.tex:12: message` (editors and CI can parse that). |
 | `extra_args` | `[]` | Extra arguments for every engine command, e.g. `["-file-line-error"]`. |
 | `env` | `{}` | Extra environment variables for the build, as a `[build.env]` table. |
 | `bib_dirs` | `[]` | Extra directories (relative to the project root, or absolute) searched recursively for `.bib` files (`BIBINPUTS`). |
@@ -142,8 +142,8 @@ Flags already present in a `lualatex = "…"` style override aren't repeated.
 
 | `out2_dir` | none | If set, the final files (`out2_exts`) are copied here, while `out_dir` keeps the intermediate output. |
 | `out2_exts` | latexmk's: `hnt`, `pdf`, `ps`, `synctex`, `synctex.gz` | Extensions copied to `out2_dir` (without the dot). |
-| `emulate_aux` | latexmk's default | Emulate `aux_dir` by moving files out of `out_dir`, for engines without `--aux-directory`. |
-| `allow_subdir_creation` | latexmk's default | May latexmk create subdirectories of `aux_dir`: `"none"`, `"aux"` (only for aux files, e.g. `\include{chapters/chap}`) or `"all"`. |
+| `emulate_aux` | `true` | Emulate `aux_dir` by moving files out of `out_dir`, for engines without `--aux-directory`. |
+| `allow_subdir_creation` | `"aux"` | May latexmk create subdirectories of `aux_dir`: `"none"`, `"aux"` (only for aux files, e.g. `\include{chapters/chap}`) or `"all"`. |
 
 A trailing `/` is added to the directories if missing. Relative paths are relative to the project root, even with a `src_dir` (texi writes `$do_cd = 1` and anchors them).
 
@@ -168,10 +168,10 @@ pdflatex = "pdflatex -shell-escape %O %S"
 | `silent` | `false` | Quiet latexmk and the TeX engines (latexmk `$silent`). `texi build --silent` turns it on for one run. |
 | `check_type3` | `true` | After `texi build`/`preview`, warn if the PDF contains Type 3 fonts. texi only; not written to `.latexmkrc`. |
 | `write_latexmkrc` | `false` | Write the generated `.latexmkrc` to the project root. Off: texi pipes it to latexmk (`-norc -r /dev/stdin`) and nothing is written. Always written on Windows. texi only; not written to `.latexmkrc`. |
-| `halt_on_error` | `true` | Stop at the first error. `texi build`/`preview` override it with `--strict`. |
-| `force_mode` | `false` | Keep going past errors (`-f`). Overridden by `--strict` (on unless strict). |
+| `halt_on_error` | `false` | Stop at the first error. `--strict` turns it on. |
+| `force_mode` | `true` | Keep going past errors (`-f`). `--strict` turns it off. |
 | `go_mode` | `"rebuild"` | `"rebuild"` redo only what changed; `"full-rebuild"` redo everything (`-g`); `"clean"` delete generated files first (`-gg`); `"force-main"` rerun only the main compile, then continue (`-gt`). `texi build --full` sets `"full-rebuild"`. |
-| `bibtex_use` | `"always"` | `"never"` (0), `"bib_exists"` (1), `"even_without_bib"` (1.5), `"always"` (2: run bibtex/biber as needed and delete `.bbl` on clean). |
+| `bibtex_use` | `"bib_exists"` | `"never"` (0), `"bib_exists"` (1), `"even_without_bib"` (1.5), `"always"` (2: run bibtex/biber as needed and delete `.bbl` on clean). |
 | `max_repeat` | `5` | Maximum latex reruns (1–20). |
 | `preview_continuous_mode` | `false` | `-pvc`. Set by `texi preview`. |
 | `preview_mode` | `false` | `-p`, one-shot preview. Always off for texi commands. |
@@ -184,7 +184,7 @@ pdflatex = "pdflatex -shell-escape %O %S"
 
 | key | default | description |
 |---|---|---|
-| `default_files` | `[]` | Main `.tex` files, relative to `src_dir`. Empty means `main.tex`. |
+| `default_files` | `[]` | Main `.tex` files, relative to `src_dir`. If not set, it takes the value of `project.targets`. |
 | `jobname` | none | Output name (`$jobname`). Falls back to `project.name`; if neither is set, no `$jobname` is written and latexmk uses the main file's name. |
 | `clean_ext` | see below | Extra extensions removed by `latexmk -c`. |
 | `clean_full_ext` | `[]` | Extra extensions removed by `latexmk -C`. |
@@ -214,11 +214,12 @@ Settings for `texi fmt`, rendered as a tex-fmt config and piped to `tex-fmt --co
 | `wrapmin` | tex-fmt's own (`wraplen` − 10) | Minimum line length before wrapping. |
 | `tabsize` | `2` | Indent width. |
 | `tabchar` | `"space"` | `"space"` or `"tab"`. |
-| `lists` | `[]` | Extra list environments (added to tex-fmt's built-ins). |
+| `lists` | `["itemize", "enumerate", "description", "enumerate*", "itemize*"]` | List environments (added to tex-fmt's built-ins). Setting it replaces this default. |
 | `verbatims` | `[]` | Extra environments left untouched (added to the built-ins). |
 | `no_indent_envs` | `[]` | Extra environments whose contents aren't indented. |
 | `wrap_chars` | `[]` | Extra characters lines may be broken after. |
 | `format_tables` | `false` | Format tables. |
+| `verbosity` | `"warn"` | tex-fmt's log level: `"error"` (hides warnings), `"warn"`, `"info"` or `"trace"`. `texi fmt --error`, `--warn`, `--info` and `--trace` override it for one run. |
 
 ## Build output
 

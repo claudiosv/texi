@@ -609,7 +609,7 @@ def test_normalize_repository() -> None:
 def cli(*args: str):  # type: ignore[no-untyped-def]
     return runner.invoke(
         app,
-        ["tlpdb", *args],
+        ["cache", *args],
         env={"COLUMNS": "200", "NO_COLOR": "1"},
         terminal_width=200,
     )

@@ -4,7 +4,7 @@
 texi fix-pdf [PDF] [--method advise|outline|rebuild]
 ```
 
-Find Type 3 fonts in a PDF and fix or explain them. Venues such as ACM reject Type 3 fonts, because they cannot be checked or substituted like normal fonts. `PDF` defaults to the project's built PDF. The command exits 1 if Type 3 fonts remain.
+texi can find Type 3 fonts in a PDF and fix or explain them. Venues such as ACM reject Type 3 fonts, because they cannot be checked or substituted like normal fonts. `PDF` defaults to the project's built PDF. The command exits 1 if Type 3 fonts remain.
 
 | option | description |
 |---|---|

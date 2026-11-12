@@ -42,7 +42,7 @@ texi build     # compile
 [project]
 name = "my-paper"
 src_dir = "src"
-main = "main.tex"
+targets = ["main.tex"]
 texlive = "2026"
 dependencies = ["acmart", "biblatex", "biber", "geometry", "microtype"]
 
@@ -51,7 +51,6 @@ pdf_mode = "pdflatex"
 out_dir = "build"
 aux_dir = "build"
 synctex = true
-file_line_error = true
 bibtex_use = "always"
 ```
 

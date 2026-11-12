@@ -1,4 +1,4 @@
-"""``texi tlpdb``: inspect the TeX Live package database."""
+"""``texi cache``: inspect the TeX Live package database and manage the package cache."""
 
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ from rich.text import Text
 
 from texi import tlpdb as tl
 
-tlpdb_app = typer.Typer(
-    help="Inspect the TeX Live package database.",
+cache_app = typer.Typer(
+    help="Inspect the TeX Live package database and manage the package cache.",
     no_args_is_help=False,
     rich_markup_mode="rich",
 )
@@ -188,14 +188,14 @@ def _print_stats(db: tl.Tlpdb) -> None:
     console.print(ftable)
 
 
-@tlpdb_app.callback(invoke_without_command=True)
+@cache_app.callback(invoke_without_command=True)
 def _default(ctx: typer.Context) -> None:
     """Inspect the TeX Live package database. Without a subcommand: `stats`."""
     if ctx.invoked_subcommand is None:
         stats()
 
 
-@tlpdb_app.command()
+@cache_app.command()
 def stats(
     repository: RepoOpt = None,
     local: LocalOpt = None,
@@ -213,7 +213,7 @@ def _highlight(value: str, pats: list[re.Pattern[str]], style: str = "") -> Text
     return t
 
 
-@tlpdb_app.command()
+@cache_app.command()
 def search(
     query: Annotated[list[str], typer.Argument(help="Words (all must match).")],
     file: Annotated[
@@ -426,7 +426,7 @@ def _fmt_size(value: str | None) -> str:
     return value or "-"
 
 
-@tlpdb_app.command()
+@cache_app.command()
 def info(
     name: Annotated[str, typer.Argument(help="TeX Live package name or CTAN key.")],
     files: Annotated[

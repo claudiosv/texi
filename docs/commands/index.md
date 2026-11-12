@@ -9,5 +9,6 @@ Run `texi --help` for the list, and `texi COMMAND --help` for details on one com
 | Build | `fix-pdf` | [fix-pdf](fix-pdf.md) |
 | Build | `fmt`, `export`, `tree` | [Format, export, tree](tools.md) |
 | TeX Live maintenance | `doctor`, `formats`, `updmap`, `mktexlsr`, `luaotfload` | [TeX Live maintenance](maintenance.md) |
+| Cache | `cache` | [Cache](cache.md) |
 
 Global option: `--debug` shows every external command texi runs, along with its output.

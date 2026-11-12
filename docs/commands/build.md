@@ -2,7 +2,7 @@
 
 ## `texi build`
 
-Compile the project to PDF with latexmk, using the settings in `texproject.toml`. texi generates `.latexmkrc` from the config on every run and then runs `latexmk`.
+Compile the project to PDF with latexmk, using the settings in `texproject.toml`. texi pipes a `.latexmkrc` generated from the config to `latexmk` on every run. texi parses latexmk's log output and prints a pretty summary of errors, warnings and overfull boxes. It also intelligently guesses the line numbers for warnings and errors.
 
 | option | description |
 |---|---|
@@ -21,7 +21,7 @@ After a successful build or preview, texi warns if the PDF contains Type 3 fonts
 
 `texi build` hides latexmk's output behind a progress line and, when it finishes, prints what matters from the TeX and biber/bibtex logs: errors with `file:line` and the offending source, warnings (undefined references, missing characters, ...) de-duplicated, and a count of over/underfull boxes. A missing package (`File 'x.sty' not found`) comes with a `texi add x` hint. If a build fails without a parseable error, the tail of latexmk's output is shown.
 
-`--guess-lines` fills in a line (shown as `~12`) for warnings TeX gives none, using the last line seen earlier in the same file, so treat it as "at or after". `--raw` prints latexmk's complete output instead; `texi clean` always does.
+`--guess-lines` fills in a line (shown as `~12`) for warnings that TeX gives none, using the last line seen earlier in the same file, so treat it as "at or after". `--raw` prints latexmk's complete output instead.
 
 File names for warnings come from tracking `(file` / `)` in the log, which is a heuristic: it can be off when a package prints unbalanced parentheses.
 

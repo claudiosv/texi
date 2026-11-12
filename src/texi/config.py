@@ -71,8 +71,8 @@ class LatexmkDirectories(BaseModel):
     out2_dir: str | None = None
     out2_exts: list[str] = Field(default_factory=list)
     # Emulate aux_dir by moving files out of out_dir (for TeX engines without --aux-directory)
-    emulate_aux: bool | None = None
-    allow_subdir_creation: SubdirCreation | None = None
+    emulate_aux: bool = True
+    allow_subdir_creation: SubdirCreation = SubdirCreation.AUX
 
     @field_validator("out_dir", "aux_dir", "out2_dir")
     @classmethod
@@ -111,7 +111,7 @@ class LatexmkPrograms(BaseModel):
 
 
 class LatexmkExecution(BaseModel):
-    halt_on_error: bool = True
+    halt_on_error: bool = False
     # Quiet latexmk and TeX engines: only errors and the final status are shown
     silent: bool = False
     # Print latexmk's internal decisions (dependency checks, rule resolution)
@@ -122,8 +122,8 @@ class LatexmkExecution(BaseModel):
     write_latexmkrc: bool = False
     go_mode: GoMode = GoMode.REBUILD
     # -f: keep processing past errors (rc variable $force_mode)
-    force_mode: bool = False
-    bibtex_use: BibtexUse = BibtexUse.ALWAYS
+    force_mode: bool = True
+    bibtex_use: BibtexUse = BibtexUse.BIB_EXISTS
     max_repeat: int = Field(default=5, ge=1, le=20)
     # Continuous preview mode (-pvc) and one-shot preview (-p)
     preview_continuous_mode: bool = False
@@ -204,7 +204,7 @@ class BuildConfig(
     synctex: bool = True
     shell_escape: bool = False
     # Report errors as file:line:message, which editors and CI can parse
-    file_line_error: bool = False
+    file_line_error: bool = True
     extra_args: list[str] = Field(default_factory=list)
     # Extra environment variables for the build, e.g. [build.env]
     env: dict[str, str] = Field(default_factory=dict)
@@ -216,14 +216,10 @@ class BuildConfig(
 class ProjectConfig(BaseModel):
     # Project name; used as the latexmk jobname unless build.jobname is set
     name: str | None = None
-    # Main .tex file, relative to src_dir
-    main: str = "main.tex"
+    # Top-level .tex files to build, relative to src_dir (build.default_files overrides)
+    targets: list[str] = Field(default_factory=lambda: ["main.tex"])
     # Expected TeX Live year (e.g. "2026"); texi warns if the installed one differs
     texlive: str | None = None
-    # Deprecated and ignored (kept so existing texproject.toml files still load): .texenv/
-    # is always a standalone tree cloned from the archive store.
-    texlive_env: Literal["usermode", "copy", "install"] = "usermode"
-    install_method: Literal["archive"] = "archive"
     # Check each downloaded package against the sha512 in the package index. A
     # mismatch is retried (first from the index's own mirror, then via the
     # redirector) and then refused. Set false to warn about a mismatch (a stale
@@ -245,11 +241,21 @@ class TexFmtConfig(BaseModel):
     tabsize: int = Field(default=2, ge=1)
     tabchar: Literal["space", "tab"] = "space"
     # Extend tex-fmt's built-in lists (they are added to, not replaced)
-    lists: list[str] = Field(default_factory=list)
+    lists: list[str] = Field(
+        default_factory=lambda: [
+            "itemize",
+            "enumerate",
+            "description",
+            "enumerate*",
+            "itemize*",
+        ]
+    )
     verbatims: list[str] = Field(default_factory=list)
     no_indent_envs: list[str] = Field(default_factory=list)
     wrap_chars: list[str] = Field(default_factory=list)
     format_tables: bool = False
+    # tex-fmt's log level: "error" (hide warnings), "warn", "info" or "trace"
+    verbosity: Literal["error", "warn", "info", "trace"] = "warn"
 
 
 class TexProjectConfig(BaseModel):
@@ -274,8 +280,8 @@ class TexProjectConfig(BaseModel):
 
     @property
     def main_files(self) -> list[str]:
-        """Main .tex files relative to src_dir (build.default_files, else project.main)."""
-        return self.build.default_files or [self.project.main]
+        """Main .tex files relative to src_dir (build.default_files, else project.targets)."""
+        return self.build.default_files or self.project.targets
 
     @property
     def set_jobname(self) -> str | None:

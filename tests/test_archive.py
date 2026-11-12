@@ -3,6 +3,7 @@
 import hashlib
 import io
 import os
+import time
 import tarfile
 from pathlib import Path
 
@@ -502,18 +503,6 @@ def test_no_tlmgr_invocation_in_sources() -> None:
             assert needle not in text, (name, needle)
 
 
-def test_install_method_config() -> None:
-    from pydantic import ValidationError
-
-    from texi.config import ProjectConfig
-
-    assert ProjectConfig().install_method == "archive"
-    with pytest.raises(ValidationError):
-        ProjectConfig(install_method="tlmgr")  # removed
-    with pytest.raises(ValidationError):
-        ProjectConfig(install_method="pip")  # ty: ignore[invalid-argument-type]
-
-
 def test_download_retries_then_succeeds() -> None:
     db = tlpdb.parse_tlpdb(_db_text())
     calls = {"n": 0}
@@ -720,3 +709,31 @@ def test_tex_fmt_failure_is_only_a_notice(tmp_path: Path, store: Path) -> None:
     assert notes == []
     assert texfmt.asset_name("windows") is None
     assert texfmt.asset_name("x86_64-linuxmusl") == "x86_64-alpine"
+
+
+def test_prune_keeps_used_and_removes_old_and_unused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    root = archive.store_dir()
+    for entry_id in ("bar-5-aaaaaaa", "bar-6-bbbbbbb", "baz-1-ccccccc"):
+        (root / entry_id).mkdir(parents=True)
+        (root / entry_id / archive.META_NAME).write_text("{}")
+        (root / entry_id / "payload").write_text("x" * 10)
+    (root / "partial").mkdir()  # no metadata: incomplete
+    (root / ".tmp-x").mkdir()
+    (root / ".dl-y.partial").write_text("x")
+    (root / "fresh").mkdir()  # incomplete but recent: may be downloading
+    (root / ".DS_Store").write_text("x")
+    old = time.time() - 7200
+    for n in ("partial", ".tmp-x", ".dl-y.partial"):
+        os.utime(root / n, (old, old))
+    dry = archive.prune({"bar-6-bbbbbbb"}, dry_run=True)
+    assert [i for i, _ in dry] == [
+        ".dl-y.partial", ".tmp-x", "bar-5-aaaaaaa", "baz-1-ccccccc", "partial"
+    ]
+    assert (root / "bar-5-aaaaaaa").exists()
+    archive.prune({"bar-6-bbbbbbb"})
+    assert sorted(p.name for p in root.iterdir()) == [
+        ".DS_Store", "bar-6-bbbbbbb", "fresh"
+    ]

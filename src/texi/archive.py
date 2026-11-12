@@ -1111,3 +1111,69 @@ def mktexlsr_targets(env_dir: Path, *, standalone: bool) -> list[Path]:
     if not standalone:
         return [env_dir]
     return [env_dir / d for d in ("texmf-dist", "texmf-var", "texmf-local")]
+
+
+def _dir_size(path: Path) -> int:
+    total = 0
+    for root, _dirs, files in os.walk(path):
+        for f in files:
+            try:
+                total += os.lstat(os.path.join(root, f)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def prune(
+    keep: set[str], *, dry_run: bool = False, partial_age: float = 3600.0
+) -> list[tuple[str, int]]:
+    """Delete store entries whose id is not in ``keep``, and incomplete downloads.
+
+    Removes old revisions of a kept package as well as packages nobody in
+    ``keep`` uses. Incomplete downloads (``.dl-*.partial`` files, ``.tmp-*``
+    staging directories, directories without ``texi-archive.json``) are
+    removed once untouched for ``partial_age`` seconds, so a download running
+    in another texi process is left alone. Other files are never touched.
+
+    Parameters
+    ----------
+    keep
+        Store ids to keep, normally ``managed(env_dir)`` ids.
+    dry_run
+        Only report.
+    partial_age
+        Minimum age in seconds of an incomplete download before it is removed.
+
+    Returns
+    -------
+    list[tuple[str, int]]
+        ``(name, bytes)`` of each removed (or, with ``dry_run``, removable) item, sorted by name.
+    """
+    root = store_dir()
+    removed: list[tuple[str, int]] = []
+    if not root.is_dir():
+        return removed
+    now = time.time()
+    for path in sorted(root.iterdir()):
+        if path.is_dir() and (path / META_NAME).is_file():
+            if path.name in keep:
+                continue
+        elif path.name.startswith((".dl-", ".tmp-")) or (
+            path.is_dir() and not path.name.startswith(".")
+        ):
+            try:
+                if now - path.stat().st_mtime < partial_age:
+                    continue
+            except OSError:
+                continue
+        else:
+            continue
+        size = _dir_size(path) if path.is_dir() else path.lstat().st_size
+        removed.append((path.name, size))
+        if dry_run:
+            continue
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            path.unlink(missing_ok=True)
+    return removed

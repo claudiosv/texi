@@ -836,7 +836,7 @@ def init(
         "[project]",
         f'name = "{config.name}"',
         f'src_dir = "{config.src_dir}"',
-        f'main = "{config.project.main}"',
+        f"targets = {json.dumps(config.project.targets)}",
         "",
         "dependencies = [",
     ]
@@ -1774,7 +1774,7 @@ def _run_latexmk(
 
     config = load_project_config(cwd / "texproject.toml")
     execution = config.build
-    execution.halt_on_error = strict
+    execution.halt_on_error = execution.halt_on_error or strict
     if full:
         execution.go_mode = GoMode.FULL_REBUILD
     execution.silent = execution.silent or silent
@@ -1782,7 +1782,7 @@ def _run_latexmk(
     parse_output = not (raw or clean)
     if parse_output:
         execution.file_line_error = True  # lets the log parser report file:line
-    execution.force_mode = not strict
+    execution.force_mode = execution.force_mode and not strict
     execution.preview_mode = False
     execution.preview_continuous_mode = preview
     rc_text = render_latexmkrc(config)
@@ -2054,12 +2054,44 @@ def fmt(
         "-c",
         help="Only report files that need formatting; change nothing.",
     ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Show tex-fmt's info messages."
+    ),
+    quiet: bool = typer.Option(
+        False, "--quiet", "-q", help="Hide tex-fmt's warnings."
+    ),
+    trace: bool = typer.Option(False, "--trace", help="Show tex-fmt's trace messages."),
+    error: bool = typer.Option(
+        False, "--error", help="Show only errors (same as --quiet)."
+    ),
+    warn: bool = typer.Option(
+        False, "--warn", help="Show errors and warnings (tex-fmt's default)."
+    ),
+    info: bool = typer.Option(
+        False, "--info", help="Show info messages too (same as --verbose)."
+    ),
     debug: DebugOpt = False,
 ) -> None:
     """Format .tex files with tex-fmt, using settings from [tex-fmt] in texproject.toml."""
+    levels = [
+        level
+        for level, on in (
+            ("info", verbose or info),
+            ("error", quiet or error),
+            ("trace", trace),
+            ("warn", warn),
+        )
+        if on
+    ]
+    if len(levels) > 1:
+        raise typer.BadParameter(
+            "Use only one of --error/--quiet, --warn, --info/--verbose and --trace."
+        )
     _intro("texi fmt")
     cwd = Path.cwd()
     config = load_project_config(cwd / "texproject.toml")
+    if levels:
+        config.tex_fmt.verbosity = levels[0]
     tex_fmt = _tex_fmt_binary(cwd / ".texenv")
     if tex_fmt is None:
         console.print(
@@ -2967,7 +2999,6 @@ _ORDER = [
     "updmap",
     "mktexlsr",
     "luaotfload",
-    "update",
 ]
 app.registered_commands.sort(
     key=lambda c: (
@@ -2977,9 +3008,39 @@ app.registered_commands.sort(
     )
 )
 
-from texi.tlpdb_cli import tlpdb_app  # noqa: E402
+from texi.tlpdb_cli import cache_app  # noqa: E402
 
-app.add_typer(tlpdb_app, name="tlpdb", rich_help_panel="TeX Live maintenance")
+
+@cache_app.command("prune")
+def cache_prune(
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", "-n", help="Only list what would be removed."),
+    ] = False,
+    debug: DebugOpt = False,
+) -> None:
+    """Remove cached packages (and incomplete downloads) this project's .texenv/ does not use, and old revisions of those it does.
+
+    The cache is shared by all projects: packages another project needs are
+    downloaded again on its next `texi sync`.
+    """
+    _intro("texi cache prune")
+    env_dir = Path.cwd() / ".texenv"
+    managed = archive.managed(env_dir)
+    if not managed:
+        console.print("[red]No packages from the cache in .texenv/. Run `texi sync` first.[/red]")
+        raise typer.Exit(code=1)
+    keep = {v["id"] for v in managed.values()}
+    removed = archive.prune(keep, dry_run=dry_run)
+    for entry_id, size in removed:
+        console.print(f"  {entry_id}  {size / 1e6:.1f} MB")
+    total = sum(size for _, size in removed) / 1e6
+    verb = "Would remove" if dry_run else "Removed"
+    outro(f"{verb} {len(removed)} {inflect_engine.plural('entry', len(removed))}, {total:.1f} MB")
+
+
+
+app.add_typer(cache_app, name="cache", rich_help_panel="Cache")
 
 
 if __name__ == "__main__":

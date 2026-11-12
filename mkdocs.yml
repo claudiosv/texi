@@ -48,6 +48,7 @@ nav:
       - fix-pdf: commands/fix-pdf.md
       - Format, export, tree: commands/tools.md
       - TeX Live maintenance: commands/maintenance.md
+      - Cache: commands/cache.md
   - Configuration: configuration.md
   - API Reference:
       - Overview: api/index.md
@@ -98,6 +99,8 @@ markdown_extensions:
   - pymdownx.inlinehilite
   - pymdownx.snippets:
       check_paths: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
   - pymdownx.tabbed:
       alternate_style: true
   - toc:
