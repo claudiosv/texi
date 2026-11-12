@@ -147,7 +147,7 @@ All default to unset (latexmk's own defaults).
 
 #### `[tex-fmt]`
 
-Settings for `texi fmt`, rendered as a tex-fmt config and piped to `tex-fmt` on every run. It overrides any `tex-fmt.toml` on disk.
+See the [tex-fmt documentation](https://github.com/wgunderwood/tex-fmt). Settings for `texi fmt`, rendered as a tex-fmt config and piped to `tex-fmt` on every run. It overrides any `tex-fmt.toml` on disk.
 
 | key | default | description |
 |---|---|---|

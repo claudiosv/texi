@@ -13,6 +13,8 @@ Texi installs a minimal, standalone TeX Live tree for each LaTeX project, so no 
 - **Reproducible.** `texi sync` writes `texi.lock` with the TeX Live year and the installed revision of every package. Commit it, and texi lists what changed when a later sync differs. Set `repository` to a frozen tlnet to pin versions for real.
 - **Everything in one `.toml` file.** All project configuration is in `texproject.toml`, including dependencies, build options, formatting,and more. That means no more hand-written `.latexmkrc` files, no separate `tex-fmt.toml`.
 - **Readable build output.** `texi build` parses latexmk's logs into a short list of errors, warnings and overfull boxes. `--raw` gives the full latexmk output.
+- **Formatting.** `texi fmt` formats your `.tex` files with `tex-fmt`, using the `[tex-fmt]` settings in `texproject.toml`. `--check` only reports. tex-fmt's log is shown like build diagnostics, with clickable file and line.
+- **Exporting.** `texi export` converts the document to Markdown or HTML (pandoc, TeX4ht, LaTeXML), or `texi export expand` inlines every `\input` into one `.tex` file, for each file in `targets`.
 - **Live preview.** `texi preview` rebuilds on every change and reports diagnostics after each cycle.
 - **Venue checks.** After a build, texi warns about Type 3 fonts, which ACM rejects, and [`texi fix-pdf`](commands/fix-pdf.md) explains or repairs them.
 

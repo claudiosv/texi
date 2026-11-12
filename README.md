@@ -12,12 +12,13 @@ An isolated workspace manager for LaTeX projects.
 |---|---|
 | `texi init` | Creates `texproject.toml` (`[project]` with `name` = directory name, `src_dir = "src"`), seeding `dependencies` by scanning `.tex` files for `\usepackage`/`\RequirePackage`. |
 | `texi add <pkg>...` | Adds packages to `dependencies` and installs them. A name that isn't a TeX Live package (e.g. `binhex`) is resolved to the package that ships it (`kastrup`), asking you to confirm or choose. `--sync` runs a full sync afterwards. |
+| `texi install <pkg>...` | Like `texi add`, but installs into `.texenv/` without adding the packages to `dependencies`. |
 | `texi sync` | Installs all `dependencies` into `.texenv/`, then updates them (`--no-update` to skip), and records the installed revisions in `texi.lock`. |
 | `texi build` | Generates `.latexmkrc` from the config and runs `latexmk`. `--strict` stops at the first error, `--full` forces a full rebuild (`go_mode = "full-rebuild"`), `--rm-pdf` deletes the old PDF first, `--silent` cuts the output down to errors and the final status, `--diagnostics` shows latexmk's internal decisions, `--raw` prints latexmk's full output. |
 | `texi clean` | Deletes generated build files with `latexmk -c` (the PDF stays, plus the `clean_ext` extensions are removed). `--all` uses `-C` and deletes the PDF too. |
 | `texi preview` | Like `build` (same flags), but opens the viewer and rebuilds on every change (`latexmk -pvc`). |
 | `texi fix-pdf [PDF]` | Deals with Type 3 fonts (rejected by ACM). The PDF defaults to the project's built PDF. `--method advise` (default) lists each Type 3 font with its pages, whether it is vector or bitmap, a guess where it came from, and how to fix it. `--method outline` converts vector Type 3 fonts to embedded TrueType (`-o` output, default `<name>.fixed.pdf`; `--in-place` overwrites and keeps a `.bak`); bitmap fonts cannot be converted. `--method rebuild` checks for Type 1 fonts (cm-super), rebuilds the project and re-checks the PDF. Exits 1 if Type 3 fonts remain. |
-| `texi export <markdown\|html\|tex4ht\|latexml>` | Converts to `build/export/<format>/`: Markdown or HTML via pandoc (with citeproc and MathJax), HTML via TeX4ht (`make4ht`, needs `luaxml`) or LaTeXML (`latexmlc`). |
+| `texi export <markdown\|html\|tex4ht\|latexml\|expand>` | Converts to `build/export/<format>/`: Markdown or HTML via pandoc (with citeproc and MathJax), HTML via TeX4ht (`make4ht`, needs `luaxml`) or LaTeXML (`latexmlc`). |
 | `texi fmt [files]` | Formats `.tex` files under `src_dir` with `tex-fmt`, using the settings in `[tex-fmt]`. `--check` only reports. |
 | `texi scan` | Lists the packages your sources use and their TeX Live packages. |
 | `texi build-tree` | Shows which files the last build actually read. |

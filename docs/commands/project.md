@@ -18,6 +18,10 @@ Add packages to `dependencies` and install them. A name that isn't a TeX Live pa
 | `--sync` | Afterwards, install and update all dependencies, as `texi sync` does. |
 | `--debug` | Show every external command texi runs. |
 
+## `texi install <pkg>...`
+
+Install packages into `.texenv/` like `texi add`, but leave `texproject.toml` alone. Names are resolved the same way. Use it for tools you need locally and that the document does not use, for example `texi install latexpand`. The installed revisions are recorded in `texi.lock`. A later `texi sync` does not remove them.
+
 ## `texi sync`
 
 Fetch the latest package index (a conditional request; the cached copy is used when the repository is unreachable), install every package listed in `dependencies` into `.texenv/`, update those whose revision changed, and record the installed revisions in `texi.lock`.

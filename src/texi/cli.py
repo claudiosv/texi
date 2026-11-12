@@ -32,6 +32,7 @@ from rich.tree import Tree
 
 from texi import archive, deptree, latexmk_files, logparse_bib, lsr, pdffonts, runaway, texenv, texfmt, tools, unused as unused_mod
 from texi import tlpdb as tlpdb_mod
+from texi.logparse_texfmt import parse_texfmt
 from texi.ctan import CtanClient
 from texi.logparse import (
     Diagnostic,
@@ -1390,6 +1391,17 @@ def _add_to_toml(path: Path, new: list[str]) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _resolve_names(names: list[str], verb: str) -> list[str]:
+    """Resolve file-like names (binhex) to TeX Live packages, asking when ambiguous; exits 1 if none."""
+    lookup = _lookup_packages(list(dict.fromkeys(names)))
+    resolved = [n if c is None else _choose_package(n, c) for n, c in lookup.items()]
+    packages = list(dict.fromkeys(r for r in resolved if r))
+    if not packages:
+        outro(f"[red]Nothing to {verb}.[/red]")
+        raise typer.Exit(code=1)
+    return packages
+
+
 @app.command(
     help="Add packages to texproject.toml and install them. File names like binhex are resolved to their package.",
     rich_help_panel="Project",
@@ -1410,12 +1422,7 @@ def add(
     config_path = Path.cwd() / "texproject.toml"
     config = load_project_config(config_path)
     _apply_project(config)
-    lookup = _lookup_packages(list(dict.fromkeys(packages)))
-    resolved = [n if c is None else _choose_package(n, c) for n, c in lookup.items()]
-    packages = list(dict.fromkeys(r for r in resolved if r))
-    if not packages:
-        outro("[red]Nothing to add.[/red]")
-        raise typer.Exit(code=1)
+    packages = _resolve_names(packages, "add")
     new = [p for p in packages if p not in config.dependencies]
     if new:
         _add_to_toml(config_path, new)
@@ -1430,6 +1437,26 @@ def add(
             no_upgrade=True,
             keep=[*config.dependencies, *new],
         )
+
+
+@app.command(
+    help="Install packages into .texenv/ without adding them to texproject.toml. File names like binhex are resolved to their package.",
+    rich_help_panel="Project",
+)
+def install(
+    packages: Annotated[
+        list[str], typer.Argument(help="Package names to install, e.g. latexpand.")
+    ],
+    debug: DebugOpt = False,
+) -> None:
+    """Install packages into .texenv/; texproject.toml stays untouched."""
+    _intro("texi install")
+    config_path = Path.cwd() / "texproject.toml"
+    config = load_project_config(config_path)
+    _apply_project(config)
+    packages = _resolve_names(packages, "install")
+    locked = list(_read_lock(Path.cwd() / LOCK_NAME))  # keep earlier installs in texi.lock
+    _sync(packages, no_upgrade=True, keep=[*locked, *config.dependencies, *packages])
 
 
 _RUN_RE = re.compile(r"Run number (\d+) of rule '([^']+)'")
@@ -1511,9 +1538,13 @@ def _resolve_biber_temp_files(
             d.hint = logparse_bib.explain_syntax(d, lines)
 
 
+# Off for now: a `file://` URL cannot carry the line number, so terminals open the file at the top.
+FILE_LINKS = False
+
+
 def _file_link(d: Diagnostic, config: TexProjectConfig) -> str | None:
     """`file://` URL of the diagnostic's file if it exists (for a clickable location)."""
-    if not d.file:
+    if not FILE_LINKS or not d.file:
         return None
     path = Path(d.file)
     if not path.is_absolute():
@@ -1582,6 +1613,9 @@ def _print_diagnostics(
         )
         if d.hint:
             console.print(f"    [cyan]→ {escape(d.hint)}[/cyan]")
+        if d.source == "tex-fmt":
+            for c in d.context:
+                console.print(f"    [dim]{escape(c[:100])}[/dim]")
     if len(warnings) > len(shown):
         console.print(
             f"[dim]  … and {len(warnings) - len(shown)} more warnings (--all-warnings lists them)[/dim]"
@@ -2058,17 +2092,25 @@ def fmt(
         False, "--verbose", "-v", help="Show tex-fmt's info messages."
     ),
     quiet: bool = typer.Option(
-        False, "--quiet", "-q", help="Hide tex-fmt's warnings."
+        False,
+        "--quiet",
+        "-q",
+        help="Print nothing, not even tex-fmt's output; only the exit code reports failure. Not with --check.",
     ),
     trace: bool = typer.Option(False, "--trace", help="Show tex-fmt's trace messages."),
     error: bool = typer.Option(
-        False, "--error", help="Show only errors (same as --quiet)."
+        False, "--error", help="Show only errors."
     ),
     warn: bool = typer.Option(
         False, "--warn", help="Show errors and warnings (tex-fmt's default)."
     ),
     info: bool = typer.Option(
         False, "--info", help="Show info messages too (same as --verbose)."
+    ),
+    raw: bool = typer.Option(
+        False,
+        "--raw",
+        help="Print tex-fmt's output as is, without parsing it. --debug does the same.",
     ),
     debug: DebugOpt = False,
 ) -> None:
@@ -2077,7 +2119,7 @@ def fmt(
         level
         for level, on in (
             ("info", verbose or info),
-            ("error", quiet or error),
+            ("error", error),
             ("trace", trace),
             ("warn", warn),
         )
@@ -2085,9 +2127,12 @@ def fmt(
     ]
     if len(levels) > 1:
         raise typer.BadParameter(
-            "Use only one of --error/--quiet, --warn, --info/--verbose and --trace."
+            "Use only one of --error, --warn, --info/--verbose and --trace."
         )
-    _intro("texi fmt")
+    if quiet and check:
+        raise typer.BadParameter("--quiet cannot be combined with --check.")
+    if not quiet:
+        _intro("texi fmt")
     cwd = Path.cwd()
     config = load_project_config(cwd / "texproject.toml")
     if levels:
@@ -2114,7 +2159,8 @@ def fmt(
         and not any(d in f.parents for d in skip_dirs)
     )
     if not targets:
-        console.print("[yellow]No .tex files found.[/yellow]")
+        if not quiet:
+            console.print("[yellow]No .tex files found.[/yellow]")
         return
     # The config goes in over stdin, so no temp file. --config alone is enough: it
     # takes precedence over any tex-fmt.toml on disk, while --noconfig would
@@ -2127,10 +2173,33 @@ def fmt(
         *map(str, targets),
     ]
     _debug_cmd(cmd)
-    run = subprocess.run(cmd, input=texfmt_config(config.tex_fmt), text=True)
+    run = subprocess.run(
+        cmd,
+        input=texfmt_config(config.tex_fmt),
+        text=True,
+        stdout=subprocess.DEVNULL if quiet else None,
+        # tex-fmt logs to stderr: captured and shown in texi's own style, unless --raw/--debug
+        stderr=subprocess.DEVNULL if quiet else None if (raw or DEBUG) else subprocess.PIPE,
+    )
+    if not quiet and not (raw or DEBUG):
+        diags = parse_texfmt(run.stderr or "", formatted=not check)  # the file changed unless --check
+        for d in diags:
+            if d.file and not Path(d.file).is_absolute():
+                d.file = str(cwd / d.file)  # tex-fmt echoes the path as given
+        for d in diags:
+            if d.kind == "info":
+                loc = _location(d, config)
+                where = f"{_linked(loc, _file_link(d, config))}  " if loc else ""
+                console.print(f"[dim]· {where}{escape(d.message)}[/dim]")
+                for c in d.context:
+                    console.print(f"    [dim]{escape(c[:100])}[/dim]")
+        _print_diagnostics(diags, config, all_warnings=True)
     if run.returncode != 0:
-        console.print("[red]✖ tex-fmt reported problems.[/red]")
+        if not quiet:
+            console.print("[red]✖ tex-fmt reported problems.[/red]")
         raise typer.Exit(code=1)
+    if quiet:
+        return
     outro(
         "[green]✔ Formatting is up to date[/green]"
         if check
@@ -2143,87 +2212,103 @@ class ExportFormat(str, Enum):
     HTML = "html"  # pandoc
     TEX4HT = "tex4ht"  # make4ht
     LATEXML = "latexml"  # latexmlc
+    EXPAND = "expand"  # latexpand: one .tex file with every \input inlined
 
 
 _EXPORT_HINTS = {
     "pandoc": "brew install pandoc",
     "make4ht": "texi add make4ht tex4ht luaxml",
     "latexmlc": "brew install latexml",
+    "latexpand": "texi add latexpand",
 }
 
 
 @app.command(
-    help="Convert the document to Markdown or HTML (pandoc, TeX4ht or LaTeXML) in build/export/.",
+    help="Convert the document to Markdown or HTML (pandoc, TeX4ht or LaTeXML), or expand it into one .tex file (latexpand), in build/export/.",
     rich_help_panel="Build",
 )
 def export(
     fmt: Annotated[
         ExportFormat,
         typer.Argument(
-            help="markdown or html (pandoc), tex4ht (make4ht), latexml (latexmlc)."
+            help="markdown or html (pandoc), tex4ht (make4ht), latexml (latexmlc), expand (latexpand)."
         ),
     ],
     debug: DebugOpt = False,
 ) -> None:
-    """Export to Markdown/HTML via pandoc, or HTML via TeX4ht (make4ht) or LaTeXML."""
+    """Export every file in `targets` to Markdown/HTML via pandoc, TeX4ht (make4ht) or LaTeXML, or expand it with latexpand."""
     _intro(f"texi export {fmt.value}")
     cwd = Path.cwd()
     config = load_project_config(cwd / "texproject.toml")
     src = (cwd / config.src_dir).resolve()
-    main = config.main_files[0]
-    if not (src / main).is_file():
-        console.print(f"[red]Error:[/red] source file not found: {src / main}")
-        raise typer.Exit(code=1)
+    mains = config.main_files
+    for main in mains:
+        if not (src / main).is_file():
+            console.print(f"[red]Error:[/red] source file not found: {src / main}")
+            raise typer.Exit(code=1)
     out_dir = cwd / "build" / "export" / fmt.value
     aux_dir = (cwd / config.build.aux_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    name = config.jobname
+    bibs = sorted(src.rglob("*.bib"))
 
-    match fmt:
-        case ExportFormat.MARKDOWN | ExportFormat.HTML:
-            tool = "pandoc"
-            bibs = sorted(src.rglob("*.bib"))
-            cmd = [tool, main, "-f", "latex"]
-            if fmt is ExportFormat.HTML:
-                cmd += ["-t", "html5", "-s", "--math-method=mathjax"]
-                target = out_dir / f"{name}.html"
-            else:
-                cmd += ["-t", "markdown"]
-                target = out_dir / f"{name}.md"
-            if bibs:
-                cmd += ["--citeproc", *(f"--bibliography={b}" for b in bibs)]
-            cmd += ["-o", str(target)]
-        case ExportFormat.TEX4HT:
-            tool = "make4ht"
-            target = out_dir
-            # make4ht mangles absolute -B/-d paths (nests them under the build dir
-            # and leaves output in the source dir), so pass them relative to src.
-            rel = lambda p: os.path.relpath(p, src)  # noqa: E731
-            cmd = [tool, "-u", "-B", rel(aux_dir), "-d", rel(target), main, "mathml"]
-        case ExportFormat.LATEXML:
-            tool = "latexmlc"
-            target = out_dir / f"{name}.html"
-            cmd = [tool, main, f"--dest={target}"]
-
+    tool = {
+        ExportFormat.MARKDOWN: "pandoc",
+        ExportFormat.HTML: "pandoc",
+        ExportFormat.TEX4HT: "make4ht",
+        ExportFormat.LATEXML: "latexmlc",
+        ExportFormat.EXPAND: "latexpand",
+    }[fmt]
     if fmt is ExportFormat.TEX4HT:
         _ensure_make4ht()
+    env_dir = cwd / ".texenv"
+    if fmt is ExportFormat.EXPAND and not shutil.which(tool) and env_dir.exists():
+        console.print("[yellow]latexpand not found; installing it into .texenv/[/yellow]")
+        _archive_tools([tool], tool)
     if not shutil.which(tool):
         console.print(f"[red]{tool} not found.[/red] Try `{_EXPORT_HINTS[tool]}`.")
         raise typer.Exit(code=1)
 
     env = os.environ.copy()
-    env_dir = cwd / ".texenv"
     if env_dir.exists():
         env.update(_texenv_vars(env_dir))
-    _debug_cmd(cmd)
-    try:
-        subprocess.run(
-            cmd, cwd=src, env=env, check=True
-        )  # run in src_dir so \input/.bib resolve
-    except subprocess.CalledProcessError as e:
-        console.print(f"\n[red]✖ {tool} failed. Check the logs above.[/red]")
-        raise typer.Exit(code=1) from e
-    outro(f"[green]✔ Exported to {escape(str(target.relative_to(cwd)))}[/green]")
+    targets: list[Path] = []
+    for main in mains:
+        name = Path(main).stem  # one output per target
+        match fmt:
+            case ExportFormat.MARKDOWN | ExportFormat.HTML:
+                cmd = [tool, main, "-f", "latex"]
+                if fmt is ExportFormat.HTML:
+                    cmd += ["-t", "html5", "-s", "--math-method=mathjax"]
+                    target = out_dir / f"{name}.html"
+                else:
+                    cmd += ["-t", "markdown"]
+                    target = out_dir / f"{name}.md"
+                if bibs:
+                    cmd += ["--citeproc", *(f"--bibliography={b}" for b in bibs)]
+                cmd += ["-o", str(target)]
+            case ExportFormat.TEX4HT:
+                target = out_dir
+                # make4ht mangles absolute -B/-d paths (nests them under the build dir
+                # and leaves output in the source dir), so pass them relative to src.
+                rel = lambda p: os.path.relpath(p, src)  # noqa: E731
+                cmd = [tool, "-u", "-B", rel(aux_dir), "-d", rel(target), main, "mathml"]
+            case ExportFormat.LATEXML:
+                target = out_dir / f"{name}.html"
+                cmd = [tool, main, f"--dest={target}"]
+            case ExportFormat.EXPAND:
+                target = out_dir / f"{name}.tex"
+                cmd = [tool, main, "-o", str(target)]
+        _debug_cmd(cmd)
+        try:
+            subprocess.run(
+                cmd, cwd=src, env=env, check=True
+            )  # run in src_dir so \input/.bib resolve
+        except subprocess.CalledProcessError as e:
+            console.print(f"\n[red]✖ {tool} failed on {escape(main)}. Check the logs above.[/red]")
+            raise typer.Exit(code=1) from e
+        targets.append(target)
+    shown = ", ".join(escape(str(t.relative_to(cwd))) for t in dict.fromkeys(targets))
+    outro(f"[green]✔ Exported to {shown}[/green]")
 
 
 @app.command(
@@ -2979,6 +3064,7 @@ def activate(
 _ORDER = [
     "init",
     "add",
+    "install",
     "sync",
     "outdated",
     "scan",

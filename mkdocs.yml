@@ -28,7 +28,7 @@ theme:
         name: Switch to system preference
   features:
     - navigation.tabs
-    - navigation.sections
+    # - navigation.sections
     - navigation.top
     - navigation.footer
     - content.code.copy
@@ -46,7 +46,7 @@ nav:
       - Project setup: commands/project.md
       - Build, preview, clean: commands/build.md
       - fix-pdf: commands/fix-pdf.md
-      - Format, export, tree: commands/tools.md
+      - Format, export, build-tree: commands/tools.md
       - TeX Live maintenance: commands/maintenance.md
       - Cache: commands/cache.md
   - Configuration: configuration.md
