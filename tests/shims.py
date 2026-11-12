@@ -6,8 +6,10 @@ import os
 import stat
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pytest
+if TYPE_CHECKING:
+    import pytest
 
 
 def _recorder(tool: str) -> str:

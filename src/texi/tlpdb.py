@@ -11,6 +11,7 @@ plus the index, so cached runs never parse the text.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import lzma
@@ -22,7 +23,7 @@ import urllib.error
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -353,9 +354,7 @@ class Tlpdb:
         self.source: str = meta.get("source", "")
         self.fetched: datetime | None = None
         if meta.get("fetched"):
-            self.fetched = datetime.fromtimestamp(
-                float(meta["fetched"]), tz=timezone.utc
-            )
+            self.fetched = datetime.fromtimestamp(float(meta["fetched"]), tz=UTC)
         self.size_bytes: int = int(meta.get("unpacked_bytes") or 0)
         comp = meta.get("compressed_bytes")
         self.compressed_bytes: int | None = int(comp) if comp else None
@@ -598,7 +597,8 @@ class Tlpdb:
             try:
                 pats = [re.compile(query, re.IGNORECASE)]
             except re.error as e:
-                raise TlpdbError(f"invalid regular expression: {e}") from e
+                msg = f"invalid regular expression: {e}"
+                raise TlpdbError(msg) from e
             terms: list[str] = []
         else:
             terms = query.split()
@@ -807,7 +807,7 @@ def _parse_entry(lines: list[str]) -> TlPackage | None:
         key, _, value = line.partition(" ")
         section = None
         if key in _SECTION_KINDS:
-            attrs = {k: v for k, v in _ATTR_RE.findall(" " + value)}
+            attrs = dict(_ATTR_RE.findall(" " + value))
             sec = key
             if key == "binfiles":
                 sec = f"binfiles:{attrs.get('arch', '').strip()}"
@@ -956,7 +956,8 @@ def _decode(data: bytes) -> tuple[str, int | None]:
         try:
             raw = lzma.decompress(data)
         except lzma.LZMAError as e:
-            raise TlpdbError(f"corrupt xz data: {e}") from e
+            msg = f"corrupt xz data: {e}"
+            raise TlpdbError(msg) from e
         return raw.decode("utf-8", errors="replace"), len(data)
     return data.decode("utf-8", errors="replace"), None
 
@@ -975,18 +976,20 @@ def load_local(path: Path | str) -> Tlpdb:
     if p.is_dir():
         for cand in ("tlpkg/texlive.tlpdb", "tlpkg/texlive.tlpdb.xz", "texlive.tlpdb"):
             if (p / cand).is_file():
-                p = p / cand
+                p /= cand
                 break
     if not p.is_file():
-        raise TlpdbError(f"tlpdb file not found: {p}")
+        msg = f"tlpdb file not found: {p}"
+        raise TlpdbError(msg)
     try:
         data = p.read_bytes()
     except OSError as e:
-        raise TlpdbError(f"cannot read {p}: {e}") from e
+        msg = f"cannot read {p}: {e}"
+        raise TlpdbError(msg) from e
     text, comp = _decode(data)
     db = parse_tlpdb(text)
     db.source = str(p.resolve())
-    db.fetched = datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc)
+    db.fetched = datetime.fromtimestamp(p.stat().st_mtime, tz=UTC)
     db.compressed_bytes = comp
     return db
 
@@ -1000,14 +1003,14 @@ def cache_dir() -> Path:
 def normalize_repository(repo: str) -> str:
     """Map the ``ctan``/``tlnet`` aliases to the mirror URL; strip a trailing slash."""
     repo = repo.strip()
-    if repo.lower() in ("ctan", "tlnet"):
+    if repo.lower() in {"ctan", "tlnet"}:
         return DEFAULT_REPOSITORY
     return repo.rstrip("/")
 
 
 def _http_repository(value: str) -> str | None:
     """A usable repository URL from a tlmgr/tlpdb option value, else None."""
-    if value.lower() in ("ctan", "tlnet"):
+    if value.lower() in {"ctan", "tlnet"}:
         return DEFAULT_REPOSITORY
     if value.startswith(("http://", "https://")):
         return value.rstrip("/")
@@ -1172,7 +1175,7 @@ def platform_arch(
     machine = (_platform.machine() if machine is None else machine).lower()
     if platform == "darwin":
         return "universal-darwin"
-    if platform in ("win32", "windows"):
+    if platform in {"win32", "windows"}:
         return "windows"
     for prefix, table in _ARCH_BY_MACHINE.items():
         if platform.startswith(prefix):
@@ -1241,17 +1244,13 @@ def _read_meta(path: Path) -> dict[str, Any]:
 
 
 def _write_meta(path: Path, meta: dict[str, Any]) -> None:
-    try:
+    with contextlib.suppress(OSError):
         path.write_text(json.dumps(meta), encoding="utf-8")
-    except OSError:
-        pass
 
 
 def _unlink(path: Path) -> None:
-    try:
+    with contextlib.suppress(OSError):
         path.unlink()
-    except OSError:
-        pass
 
 
 def _write_index(
@@ -1280,11 +1279,12 @@ def _write_index(
         conn.execute("PRAGMA synchronous = OFF")
         _populate(conn, _parse_packages(text), values)
         conn.close()
-        os.replace(tmp, dest)
+        Path(tmp).replace(dest)
     except (sqlite3.Error, OSError) as e:
         conn.close()
         _unlink(tmp)
-        raise TlpdbError(f"cannot build the index {dest}: {e}") from e
+        msg = f"cannot build the index {dest}: {e}"
+        raise TlpdbError(msg) from e
 
 
 def _open_index(path: Path) -> Tlpdb:
@@ -1294,7 +1294,8 @@ def _open_index(path: Path) -> Tlpdb:
     try:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if version != SCHEMA_VERSION:
-            raise sqlite3.DatabaseError(f"schema version {version}")
+            msg = f"schema version {version}"
+            raise sqlite3.DatabaseError(msg)
         return Tlpdb(conn, path)
     except sqlite3.Error:
         conn.close()
@@ -1317,9 +1318,7 @@ def has_cache(repository: str) -> bool:
     return any((cache_dir() / f"{key}.{ext}").is_file() for ext in ("sqlite", "xz"))
 
 
-def _read_body(
-    resp: Any, progress: Callable[[int, int], None] | None
-) -> bytes:
+def _read_body(resp: Any, progress: Callable[[int, int], None] | None) -> bytes:
     """Read a response, reporting ``(bytes_done, bytes_total)`` (total 0 if unknown)."""
     if progress is None:
         return resp.read()
@@ -1363,7 +1362,7 @@ def load_remote(
     meta_path = cdir / f"{key}.json"
     db_path = cdir / f"{key}.sqlite"
     meta: dict[str, Any] = {}
-    now = datetime.now(timezone.utc).timestamp()
+    now = datetime.now(UTC).timestamp()
 
     def fetched_ts() -> float:
         for p in (xz, db_path):
@@ -1389,7 +1388,8 @@ def load_remote(
                 db = _open_index(db_path)
             except sqlite3.Error as e:
                 _unlink(db_path)
-                raise TlpdbError(f"cannot open the index {db_path}: {e}") from e
+                msg_0 = f"cannot open the index {db_path}: {e}"
+                raise TlpdbError(msg_0) from e
         if db is None:
             return None
         db.repository = repo
@@ -1397,7 +1397,7 @@ def load_remote(
         db.source = str(
             meta.get("url") or db.source or f"{repo}/tlpkg/texlive.tlpdb.xz"
         )
-        db.fetched = datetime.fromtimestamp(fetched_ts(), tz=timezone.utc)
+        db.fetched = datetime.fromtimestamp(fetched_ts(), tz=UTC)
         db.from_cache = from_cache
         db.offline = offline
         return db
@@ -1439,16 +1439,18 @@ def load_remote(
             db = from_stale(offline=True)
             if db:
                 return db
-        raise TlpdbError(f"cannot download {url}: HTTP {e.code} {e.reason}") from e
+        msg = f"cannot download {url}: HTTP {e.code} {e.reason}"
+        raise TlpdbError(msg) from e
     except (urllib.error.URLError, OSError, TimeoutError) as e:
         db = from_stale(offline=True)
         if db:
             return db
         reason = getattr(e, "reason", e)
-        raise TlpdbError(
+        msg = (
             f"cannot download {url}: {reason}. You seem to be offline and there is "
             "no cached copy; use --local PATH or try again with a connection."
-        ) from e
+        )
+        raise TlpdbError(msg) from e
 
     text, comp = _decode(body)  # validate before replacing the cache
     previous: bytes | None = None
@@ -1461,7 +1463,7 @@ def load_remote(
                 old_revisions = old.revisions()
             finally:
                 old._conn.close()
-    except (OSError, sqlite3.Error):
+    except OSError, sqlite3.Error:
         pass
     # The redirector may hand us a mirror that is behind the copy we already have.
     # Ask again (another mirror answers); if all are older keep the cached index.
@@ -1470,12 +1472,14 @@ def load_remote(
         if _newest_revision(text) >= old_top:
             break
         try:
-            with urlopen(Request(url, headers={"User-Agent": USER_AGENT}), timeout=TIMEOUT) as r2:
+            with urlopen(
+                Request(url, headers={"User-Agent": USER_AGENT}), timeout=TIMEOUT
+            ) as r2:
                 body2 = _read_body(r2, progress)
                 final2 = r2.geturl() if hasattr(r2, "geturl") else url
                 etag, last_mod = r2.headers.get("ETag"), r2.headers.get("Last-Modified")
             text2, comp2 = _decode(body2)
-        except (urllib.error.URLError, OSError, TimeoutError, TlpdbError):
+        except urllib.error.URLError, OSError, TimeoutError, TlpdbError:
             break
         body, text, comp, final = body2, text2, comp2, final2
     if old_top and _newest_revision(text) < old_top:
@@ -1496,7 +1500,8 @@ def load_remote(
     _write_index(db_path, text, comp, repo, meta, now)
     db = open_cached(from_cache=False)
     if db is None:
-        raise TlpdbError(f"cannot open the index {db_path}")
+        msg = f"cannot open the index {db_path}"
+        raise TlpdbError(msg)
     db.changed = None if previous is None else previous != body
     db.previous_revisions = old_revisions
     return db
@@ -1528,6 +1533,6 @@ def load(
     if source is None:
         source = DEFAULT_REPOSITORY
     s = str(source)
-    if not re.match(r"^(https?|file)://", s) and s.lower() not in ("ctan", "tlnet"):
+    if not re.match(r"^(https?|file)://", s) and s.lower() not in {"ctan", "tlnet"}:
         return load_local(s)
     return load_remote(s, refresh=refresh, progress=progress)

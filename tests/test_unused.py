@@ -85,13 +85,18 @@ def test_analyze_sorts_dependencies(env: Path) -> None:
     assert rep.not_installed == ["ghost"]
 
 
-def test_command_needs_a_build_record(env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_command_needs_a_build_record(
+    env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     proj = env.parent
-    (proj / "texproject.toml").write_text('[project]\nname = "p"\ndependencies = ["used"]\n')
+    (proj / "texproject.toml").write_text(
+        '[project]\nname = "p"\ndependencies = ["used"]\n'
+    )
     monkeypatch.chdir(proj)
     monkeypatch.setattr(cli, "_target_arch", lambda e: "universal-darwin")
     r = runner.invoke(cli.app, ["unused"])
-    assert r.exit_code == 1 and "Run `texi build` first" in " ".join(r.output.split())
+    assert r.exit_code == 1
+    assert "Run `texi build` first" in " ".join(r.output.split())
 
 
 def test_command_lists_unused(env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -108,9 +113,12 @@ def test_command_lists_unused(env: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     )
     monkeypatch.chdir(proj)
     monkeypatch.setattr(cli, "_target_arch", lambda e: "universal-darwin")
-    monkeypatch.setattr(cli, "resolve_dependencies", lambda names, console, *a: sorted(names))
+    monkeypatch.setattr(
+        cli, "resolve_dependencies", lambda names, console, *a: sorted(names)
+    )
     r = runner.invoke(cli.app, ["unused"])
     flat = " ".join(r.output.split())
     assert r.exit_code == 0, r.output
-    assert "1 unused: likely safe to remove" in flat and "lonely" in flat
+    assert "1 unused: likely safe to remove" in flat
+    assert "lonely" in flat
     assert "1 used, 1 unused" in flat

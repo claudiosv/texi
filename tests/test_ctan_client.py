@@ -51,24 +51,31 @@ def test_package_full_record(tmp_path: Path) -> None:
     c, _ = make(tmp_path, {f"{API}/pkg/amsmath": (200, fx("pkg_amsmath.json"))})
     p = c.package("amsmath")
     assert p is not None
-    assert p.id == "amsmath" and p.name == "AMS math"
+    assert p.id == "amsmath"
+    assert p.name == "AMS math"
     assert p.license == ["lppl1.3c"]
-    assert p.version and p.version.number == "2.17z"
+    assert p.version
+    assert p.version.number == "2.17z"
     assert p.copyright[1].owner.startswith("LaTeX3")
     assert {d.language for d in p.documentation} == {"en", None}
-    assert p.ctan and p.ctan.path.endswith("amsmath")
+    assert p.ctan
+    assert p.ctan.path.endswith("amsmath")
     assert p.install == "/macros/latex/required/latex-amsmath.tds.zip"
-    assert p.texlive == "amsmath" and p.also == ["nath"]
+    assert p.texlive == "amsmath"
+    assert p.also == ["nath"]
     assert p.topics == ["maths", "tagged-pdf-partially"]
-    assert p.authors[0].id == "latex" and p.authors[0].active is True
+    assert p.authors[0].id == "latex"
+    assert p.authors[0].active is True
 
 
 def test_package_missing_fields_and_license_list(tmp_path: Path) -> None:
     c, _ = make(tmp_path, {f"{API}/pkg/pgf": (200, fx("pkg_pgf.json"))})
     p = c.package("pgf")
-    assert p and sorted(p.license) == ["fdl", "gpl2", "lppl1.3c"]
+    assert p
+    assert sorted(p.license) == ["fdl", "gpl2", "lppl1.3c"]
     assert p.aliases[0].id == "tikz"
-    assert p.home is None and p.descriptions[0].language is None
+    assert p.home is None
+    assert p.descriptions[0].language is None
 
 
 def test_package_install_object_and_unknown_fields() -> None:
@@ -78,7 +85,8 @@ def test_package_install_object_and_unknown_fields() -> None:
         "brandnew": 1,
         "topics": None,
     })
-    assert p.install == "/a.zip" and p.topics == []
+    assert p.install == "/a.zip"
+    assert p.topics == []
 
 
 def test_package_404_is_none(tmp_path: Path) -> None:
@@ -97,7 +105,7 @@ def test_user_agent(tmp_path: Path) -> None:
 
 
 def test_authors_and_author(tmp_path: Path) -> None:
-    c, m = make(
+    c, _m = make(
         tmp_path,
         {
             f"{API}/authors?key=knuth": (200, fx("authors_knuth.json")),
@@ -105,10 +113,14 @@ def test_authors_and_author(tmp_path: Path) -> None:
         },
     )
     [a] = c.authors("knuth")
-    assert a.key == "knuth" and a.familyname == "Knuth" and a.died is False
+    assert a.key == "knuth"
+    assert a.familyname == "Knuth"
+    assert a.died is False
     assert a.display_name == "Donald E. Knuth"
     k = c.author("knuth", ref=True)
-    assert k and k.packages and len(k.packages) == 5
+    assert k
+    assert k.packages
+    assert len(k.packages) == 5
 
 
 def test_topics_and_topic(tmp_path: Path) -> None:
@@ -121,7 +133,10 @@ def test_topics_and_topic(tmp_path: Path) -> None:
     )
     assert c.topics("abb")[0].key == "abbrev"
     t = c.topic("cv", ref=True)
-    assert t and t.details and t.packages and "cv" in t.packages
+    assert t
+    assert t.details
+    assert t.packages
+    assert "cv" in t.packages
 
 
 def test_topic_docs_references_alias() -> None:
@@ -139,9 +154,11 @@ def test_licenses_and_version(tmp_path: Path) -> None:
         },
     )
     lic = c.licenses("gpl")
-    assert lic[0].key == "gpl" and lic[0].free is True
+    assert lic[0].key == "gpl"
+    assert lic[0].free is True
     v = c.version("2.0")
-    assert v and v.version == "2.0"
+    assert v
+    assert v.version == "2.0"
     assert c.version() is None  # 3.0 has no version endpoint (live behaviour)
 
 
@@ -163,17 +180,22 @@ def test_packages_key_and_aliases_param(tmp_path: Path) -> None:
     assert m.requests[-1].url.params["include-aliases"] == "true"
     assert m.requests[-1].url.params["key"] == "tikz"
     [al] = c.package_aliases("tikz")
-    assert al.alias == "tikz" and al.pkg == "pgf"
+    assert al.alias == "tikz"
+    assert al.pkg == "pgf"
 
 
 def test_search(tmp_path: Path) -> None:
     c, m = make(tmp_path, {"/search/json": (200, fx("search_knuth.json"))})
     r = c.search("knuth", max=2, packages=True)
-    assert r.number_of_hits == 112 and r.max == 2 and len(r.hits) == 2
+    assert r.number_of_hits == 112
+    assert r.max == 2
+    assert len(r.hits) == 2
     assert r.hits[0].path == "/pkg/knuth-lib"
     q = m.requests[0].url.params
-    assert q["phrase"] == "knuth" and q["ext"] == "true"
-    assert q["PKG"] == "true" and q["AUTHORS"] == "false"
+    assert q["phrase"] == "knuth"
+    assert q["ext"] == "true"
+    assert q["PKG"] == "true"
+    assert q["AUTHORS"] == "false"
 
 
 def test_errors(tmp_path: Path) -> None:
@@ -192,7 +214,8 @@ def test_errors(tmp_path: Path) -> None:
 
 def test_offline_raises_and_find_texlive_none(tmp_path: Path) -> None:
     def boom(request: httpx2.Request) -> httpx2.Response:
-        raise httpx2.ConnectError("offline", request=request)
+        msg = "offline"
+        raise httpx2.ConnectError(msg, request=request)
 
     c = CtanClient(transport=httpx2.MockTransport(boom), cache_dir=tmp_path)
     with pytest.raises(CtanError):
@@ -212,7 +235,8 @@ def test_cache_second_call_skips_transport(tmp_path: Path) -> None:
     assert c2.package("binhex")
     assert m2.requests == []
     # 404s are not cached
-    assert c2.package("zzz") is None and c2.package("zzz") is None
+    assert c2.package("zzz") is None
+    assert c2.package("zzz") is None
     assert len(m2.requests) == 2
 
 
@@ -271,7 +295,8 @@ def test_live_binhex(tmp_path: Path) -> None:
     with CtanClient(cache_dir=tmp_path) as c:
         assert c.find_texlive("binhex") == ["kastrup"]
         p = c.package("binhex")
-        assert p and p.caption
+        assert p
+        assert p.caption
         assert c.package("nonexistentpkg") is None
 
 

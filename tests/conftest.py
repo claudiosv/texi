@@ -30,7 +30,7 @@ def _reset_tlmgr_guard():
 
 
 @pytest.fixture(autouse=True)
-def _no_retry_wait(monkeypatch: pytest.MonkeyPatch):
+def _no_retry_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the number of download retries but not the waiting."""
     from texi import archive
 
@@ -38,7 +38,7 @@ def _no_retry_wait(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
-def _no_tex_fmt_download(monkeypatch: pytest.MonkeyPatch):
+def _no_tex_fmt_download(monkeypatch: pytest.MonkeyPatch) -> None:
     """CLI tests must not fetch tex-fmt from CTAN."""
     from texi import cli
 

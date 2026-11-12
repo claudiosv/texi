@@ -1,11 +1,11 @@
-from enum import Enum
-from typing import Literal
+from enum import StrEnum
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-class PdfMode(str, Enum):
+class PdfMode(StrEnum):
     """latexmk's $pdf_mode: how the PDF is produced.
 
     off      (0) no PDF
@@ -24,14 +24,14 @@ class PdfMode(str, Enum):
     XELATEX = "xelatex"
 
 
-class BibtexUse(str, Enum):
+class BibtexUse(StrEnum):
     NEVER = "never"
     BIB_EXISTS = "bib_exists"
     EVEN_WITHOUT_BIB = "even_without_bib"
     ALWAYS = "always"
 
 
-class ViewerUpdate(str, Enum):
+class ViewerUpdate(StrEnum):
     """How latexmk gets a PDF/DVI/PS viewer to show a rebuilt file."""
 
     AUTO = "auto"  # the viewer watches the file itself
@@ -41,7 +41,7 @@ class ViewerUpdate(str, Enum):
     COMMAND = "command"  # latexmk runs the *_update_command
 
 
-class GoMode(str, Enum):
+class GoMode(StrEnum):
     """How much latexmk redoes (latexmk's $go_mode)."""
 
     REBUILD = "rebuild"  # only what changed
@@ -56,7 +56,7 @@ class LatexmkEngines(BaseModel):
     postscript_mode: bool = False
 
 
-class SubdirCreation(str, Enum):
+class SubdirCreation(StrEnum):
     """Whether latexmk may create subdirectories of aux_dir (latexmk's $allow_subdir_creation)."""
 
     NONE = "none"

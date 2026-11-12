@@ -5,7 +5,7 @@ from __future__ import annotations
 import difflib
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -127,7 +127,7 @@ def _fmt_time(dt: datetime | None) -> str:
 def _age(dt: datetime | None) -> str:
     if dt is None:
         return ""
-    secs = int((datetime.now(timezone.utc) - dt).total_seconds())
+    secs = int((datetime.now(UTC) - dt).total_seconds())
     if secs < 90:
         return f"{secs}s ago"
     if secs < 5400:
@@ -154,9 +154,11 @@ def _print_stats(db: tl.Tlpdb) -> None:
         rows.append(("Compressed", _fmt_bytes(db.compressed_bytes)))
     rows.append(("Unpacked", _fmt_bytes(db.size_bytes)))
     if db.index_path:
-        rows.append(("Index", str(db.index_path)))
-        rows.append(("Schema version", str(db.schema_version)))
-        rows.append(("Index size", _fmt_bytes(db.index_size)))
+        rows.extend((
+            ("Index", str(db.index_path)),
+            ("Schema version", str(db.schema_version)),
+            ("Index size", _fmt_bytes(db.index_size)),
+        ))
     rows.append(("Entries", f"{st.entries:,}"))
     if st.release:
         rel = f"TeX Live {st.release}"
@@ -375,8 +377,10 @@ def _print_info(
         size, csum = f"{prefix}containersize", f"{prefix}containerchecksum"
         used.update((size, csum))
         if p.first(size):
-            crow.append((label, f"{_fmt_size(p.first(size))}"))
-            crow.append(("  checksum", p.first(csum) or "-"))
+            crow.extend((
+                (label, f"{_fmt_size(p.first(size))}"),
+                ("  checksum", p.first(csum) or "-"),
+            ))
     if crow:
         _kv(crow)
         console.print()

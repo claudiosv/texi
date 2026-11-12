@@ -401,15 +401,18 @@ class CtanClient:
                 url, params=params, extensions={"caching": {"ttl": ttl}}
             )
         except httpx2.HTTPError as e:
-            raise CtanError(f"CTAN request failed: {url}: {e}") from e
+            msg = f"CTAN request failed: {url}: {e}"
+            raise CtanError(msg) from e
         if resp.status_code == 404 and allow_404:
             return None
         if resp.status_code != 200:
-            raise CtanError(f"CTAN returned HTTP {resp.status_code} for {url}")
+            msg = f"CTAN returned HTTP {resp.status_code} for {url}"
+            raise CtanError(msg)
         try:
             return resp.json()
         except ValueError as e:
-            raise CtanError(f"CTAN returned invalid JSON for {url}") from e
+            msg = f"CTAN returned invalid JSON for {url}"
+            raise CtanError(msg) from e
 
     def _api(
         self,
@@ -431,7 +434,8 @@ class CtanClient:
         try:
             return parse(data)
         except ValidationError as e:
-            raise CtanError(f"Unexpected CTAN response for {what}: {e}") from e
+            msg = f"Unexpected CTAN response for {what}: {e}"
+            raise CtanError(msg) from e
 
     @staticmethod
     def _key_params(key: str | None) -> dict[str, str]:
@@ -495,7 +499,8 @@ class CtanClient:
             params["include-aliases"] = "true"
         data = self._api("packages", params, ttl=TTL_PACKAGE)
         if not isinstance(data, list):
-            raise CtanError("Unexpected CTAN response for packages: not a list")
+            msg = "Unexpected CTAN response for packages: not a list"
+            raise CtanError(msg)
         pkgs = [d for d in data if not (isinstance(d, dict) and "alias" in d)]
         aliases = [d for d in data if isinstance(d, dict) and "alias" in d]
         return (
@@ -546,7 +551,7 @@ class CtanClient:
         phrase: str,
         *,
         offset: int = 0,
-        max: int = 16,  # noqa: A002
+        max: int = 16,  # ruff: ignore[builtin-argument-shadowing]
         packages: bool | None = None,
         authors: bool | None = None,
         topics: bool | None = None,

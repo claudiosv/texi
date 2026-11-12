@@ -13,7 +13,7 @@ Package hyperref Warning: Token not allowed in a PDF string (Unicode):
 ./sections/intro.tex:33: Undefined control sequence.
 l.33 \foo
          bar
-? 
+?
 ) (/x/preamble/common.tex
 ! LaTeX Error: Command \Bbbk already defined.
 
@@ -42,7 +42,8 @@ def test_errors_with_file_and_line():
 def test_warnings_and_boxes():
     diags = parse_tex_log(LOG)
     w = [d for d in diags if d.kind == "warning"]
-    assert w[0].line == 12 and w[0].file == "sections/intro.tex"
+    assert w[0].line == 12
+    assert w[0].file == "sections/intro.tex"
     assert "Reference `fig:x' on page 1 undefined" in w[0].message
     assert "removing `math shift'" in w[1].message  # (hyperref) continuation joined
     assert [d.kind for d in diags if d.kind == "box"] == ["box"]
@@ -69,7 +70,8 @@ def test_blg():
 def test_context_strips_carriage_return_marker():
     log = "! Undefined control sequence.\nl.3 Hello \\foo^^M\n   world\n"
     (d,) = parse_tex_log(log)
-    assert "^^M" not in "".join(d.context) and d.line == 3
+    assert "^^M" not in "".join(d.context)
+    assert d.line == 3
 
 
 def test_warning_includes_indented_continuation():

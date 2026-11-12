@@ -34,7 +34,9 @@ def make_pdf(path: Path, procs: dict[str, bytes] | None) -> Path:
         cp = doc.get_new_xref()
         doc.update_object(
             cp,
-            "<<" + "".join(f"/{n} {x} 0 R" for n, x in zip(names, proc_xrefs)) + ">>",
+            "<<"
+            + "".join(f"/{n} {x} 0 R" for n, x in zip(names, proc_xrefs, strict=False))
+            + ">>",
         )
         font = res[0]
         doc.update_object(

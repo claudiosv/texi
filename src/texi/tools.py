@@ -1,6 +1,5 @@
 """Thin `sh` wrappers around the TeX Live maintenance tools."""
 
-
 import sh
 
 _ENGINE_FMT = {

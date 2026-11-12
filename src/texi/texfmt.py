@@ -46,7 +46,7 @@ def asset_name(arch: str, machine: str | None = None) -> str | None:
     """Name of the CTAN binary for a TeX Live architecture, or None (no binary, e.g. Windows)."""
     if arch == "universal-darwin":
         m = (machine or platform.machine()).lower()
-        return "aarch64-macos" if m in ("arm64", "aarch64") else "x86_64-macos"
+        return "aarch64-macos" if m in {"arm64", "aarch64"} else "x86_64-macos"
     return _ASSETS.get(arch)
 
 
@@ -64,7 +64,8 @@ def _version(client: httpx.Client) -> str:
         r.raise_for_status()
         return str(r.json()["version"]["number"])
     except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
-        raise TexFmtError(f"cannot read the {PACKAGE} version from CTAN: {e}") from e
+        msg = f"cannot read the {PACKAGE} version from CTAN: {e}"
+        raise TexFmtError(msg) from e
 
 
 def _stored(entry: Path, asset: str) -> Path | None:
@@ -74,28 +75,32 @@ def _stored(entry: Path, asset: str) -> Path | None:
         binary = entry / BINARY
         if meta["asset"] == asset and _sha256(binary.read_bytes()) == meta["sha256"]:
             return binary
-    except (OSError, ValueError, KeyError):
+    except OSError, ValueError, KeyError:
         pass
     return None
 
 
-def _download(
-    client: httpx.Client, asset: str, entry: Path, version: str
-) -> Path:
+def _download(client: httpx.Client, asset: str, entry: Path, version: str) -> Path:
     try:
         url = BIN_URL.format(name=BINARY, asset=asset)
         r = client.get(url)
         r.raise_for_status()
         with tarfile.open(fileobj=io.BytesIO(r.content), mode="r:gz") as tf:
             member = next(
-                (m for m in tf.getmembers() if m.isfile() and Path(m.name).name == BINARY),
+                (
+                    m
+                    for m in tf.getmembers()
+                    if m.isfile() and Path(m.name).name == BINARY
+                ),
                 None,
             )
             if member is None or (fh := tf.extractfile(member)) is None:
-                raise TexFmtError(f"no {BINARY} in {BINARY}-{asset}.tar.gz")
+                msg = f"no {BINARY} in {BINARY}-{asset}.tar.gz"
+                raise TexFmtError(msg)
             data = fh.read()
     except (httpx.HTTPError, tarfile.TarError, OSError) as e:
-        raise TexFmtError(f"cannot download {PACKAGE}: {e}") from e
+        msg = f"cannot download {PACKAGE}: {e}"
+        raise TexFmtError(msg) from e
     entry.mkdir(parents=True, exist_ok=True)
     binary = entry / BINARY
     tmp = entry / f".{BINARY}.part"
@@ -137,14 +142,14 @@ def installed_version(env_dir: Path, arch: str | None = None) -> str | None:
     """
     try:
         return str(json.loads(_record(env_dir).read_text(encoding="utf-8"))["version"])
-    except (OSError, ValueError, KeyError):
+    except OSError, ValueError, KeyError:
         pass
     if arch and (path := installed(env_dir, arch)):
         try:
             out = subprocess.run(
                 [str(path), "--version"], capture_output=True, text=True, timeout=10
             ).stdout
-        except (OSError, subprocess.SubprocessError):
+        except OSError, subprocess.SubprocessError:
             return None
         if m := re.search(r"\d+(?:\.\d+)+", out):
             return m.group(0)
@@ -233,5 +238,7 @@ def ensure(
     archive.clone_file(binary, dst)
     rec = _record(env_dir)
     rec.parent.mkdir(parents=True, exist_ok=True)
-    rec.write_text(json.dumps({"package": PACKAGE, "version": version}) + "\n", encoding="utf-8")
+    rec.write_text(
+        json.dumps({"package": PACKAGE, "version": version}) + "\n", encoding="utf-8"
+    )
     return dst

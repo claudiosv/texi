@@ -55,7 +55,9 @@ def parse_texfmt(text: str, *, formatted: bool = False) -> list[Diagnostic]:
         m = _LINE.match(line)
         if not m:
             diags.append(
-                Diagnostic("info", line.strip(), source=SOURCE, code="output", raw=[raw])
+                Diagnostic(
+                    "info", line.strip(), source=SOURCE, code="output", raw=[raw]
+                )
             )
             continue
         level, file, rest = m.groups()
@@ -87,7 +89,7 @@ def parse_texfmt(text: str, *, formatted: bool = False) -> list[Diagnostic]:
             code="trace" if level == "TRACE" else _slug(message),
             raw=[raw],
         )
-        if level in ("ERROR", "WARN"):
+        if level in {"ERROR", "WARN"}:
             diag.hint = _HINTS.get(diag.code or "")
         diags.append(diag)
     return diags

@@ -1,4 +1,4 @@
-"""Parse the files latexmk leaves behind: ``.fls`` and ``.fdb_latexmk``.
+r"""Parse the files latexmk leaves behind: ``.fls`` and ``.fdb_latexmk``.
 
 ``latexmk -recorder`` makes TeX write a *file list* (``<jobname>.fls``) with
 one ``INPUT``/``OUTPUT`` line per file it opened. latexmk itself keeps a
@@ -20,6 +20,7 @@ Examples
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 from dataclasses import dataclass, field
@@ -49,7 +50,7 @@ def _normalize(path: str, pwd: str | None) -> str:
     """Absolute-if-possible, ``.``/``..``-free form of ``path``, without touching the disk."""
     if not path:
         return path
-    if not os.path.isabs(path) and pwd:
+    if not Path(path).is_absolute() and pwd:
         path = os.path.join(pwd, path)
     return os.path.normpath(path)
 
@@ -545,7 +546,7 @@ def _parse_rule_head(m: re.Match[str]) -> Rule:
 
 def _parse_dep(toks: list[str], generated: bool) -> Dep:
     md5 = toks[3] if len(toks) > 3 else None
-    if md5 in (None, "", "0"):
+    if md5 in {None, "", "0"}:
         md5 = None
     return Dep(
         path=toks[0],
@@ -661,14 +662,10 @@ class ProjectFiles:
         """
         aux = Path(aux_dir)
         pf = cls(aux_dir=aux, jobname=jobname)
-        try:
+        with contextlib.suppress(OSError):
             pf.fls = load_fls(aux / f"{jobname}.fls")
-        except OSError:
-            pass
-        try:
+        with contextlib.suppress(OSError):
             pf.fdb = load_fdb(aux / f"{jobname}.fdb_latexmk")
-        except OSError:
-            pass
         return pf
 
     @property

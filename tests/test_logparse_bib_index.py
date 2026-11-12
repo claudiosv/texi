@@ -15,7 +15,8 @@ def summary(diags):
 
 def test_biber_errors():
     r = bib("biber_errors.blg")
-    assert r.info.tool == "biber" and r.info.version == "2.19"
+    assert r.info.tool == "biber"
+    assert r.info.version == "2.19"
     assert (r.info.error_count, r.info.warning_count) == (3, 1)
     assert summary(r.diagnostics) == [
         ("error", "biber-syntax", "refs.bib", 12),
@@ -30,7 +31,8 @@ def test_biber_errors():
 def test_biber_missing_control_file():
     r = bib("biber_nocontrol.blg")
     (d,) = r.diagnostics
-    assert d.code == "biber-missing-control-file" and d.file == "nonexistent.bcf"
+    assert d.code == "biber-missing-control-file"
+    assert d.file == "nonexistent.bcf"
 
 
 def test_biber_warnings():
@@ -58,7 +60,9 @@ def test_bibtex_errors():
         "bt.aux",
         "plain.bst",
     )
-    assert i.databases == ["refs.bib"] and i.entries_used == 2 and i.error_count == 2
+    assert i.databases == ["refs.bib"]
+    assert i.entries_used == 2
+    assert i.error_count == 2
     assert summary(r.diagnostics) == [
         ("error", "bibtex-missing-database", "bt.aux", 6),
         ("error", "bibtex-syntax", "refs.bib", 3),
@@ -75,7 +79,8 @@ def test_bibtex_nostyle():
         "bibtex-missing-style",
         "bibtex-missing-command",
     ]
-    assert r.diagnostics[0].file == "bt4.aux" and r.diagnostics[0].line == 3
+    assert r.diagnostics[0].file == "bt4.aux"
+    assert r.diagnostics[0].line == 3
 
 
 def test_bibtex_repeated_bibstyle():
@@ -89,13 +94,15 @@ def test_bibtex_repeated_bibstyle():
 
 def test_parse_blg_compat():
     ds = parse_blg(read("bibtex_errors.blg"), "bibtex")
-    assert len(ds) == 4 and {d.source for d in ds} == {"bibtex"}
+    assert len(ds) == 4
+    assert {d.source for d in ds} == {"bibtex"}
     assert parse_blg("") == []
 
 
 def test_makeindex_errors():
     r = parse_index(read("makeindex_errors.ilg"))
-    assert r.info.tool == "makeindex" and r.info.version == "2.18"
+    assert r.info.tool == "makeindex"
+    assert r.info.version == "2.18"
     assert (r.info.accepted, r.info.rejected, r.info.warning_count) == (4, 3, 1)
     assert [(d.kind, d.file, d.line) for d in r.diagnostics] == [
         ("error", "bad.idx", 4),
@@ -113,17 +120,21 @@ def test_makeindex_ok():
     ]:
         r = parse_index(read(name))
         assert r.diagnostics == []
-        assert r.info.output == out and r.info.rejected == 0 and r.info.sorted
+        assert r.info.output == out
+        assert r.info.rejected == 0
+        assert r.info.sorted
 
 
 def test_makeindex_missing_input():
     (d,) = parse_index(read("makeindex_missing.txt")).diagnostics
-    assert d.code == "index-input-missing" and d.kind == "error"
+    assert d.code == "index-input-missing"
+    assert d.kind == "error"
 
 
 def test_xindy():
     r = parse_index(read("xindy_warn.glg"))
-    assert r.info.tool == "xindy" and r.info.nothing_written
+    assert r.info.tool == "xindy"
+    assert r.info.nothing_written
     assert [(d.kind, d.code) for d in r.diagnostics] == [
         ("warning", "xindy-warning"),
         ("error", "xindy-error"),
@@ -143,10 +154,13 @@ def test_biber_temp_file_is_mapped_and_explained() -> None:
         "possible runaway string started at line 2\n"
     )
     (d,) = parse_blg(blg)
-    assert d.file == md5 and d.line == 3
+    assert d.file == md5
+    assert d.line == 3
     bcf = "<bcf:datasource type='file' datatype='bibtex'>main.bib</bcf:datasource>"
     assert biber_temp_sources(bcf)[md5] == "main.bib"
     d.file = "/p/main.bib"
     lines = ["@misc{k,", "  author = {A and family=B,", "  useprefix=true and C},", "}"]
     hint = explain_syntax(d, lines)
-    assert hint and "from line 2 to 3" in hint and "'useprefix='" in hint
+    assert hint
+    assert "from line 2 to 3" in hint
+    assert "'useprefix='" in hint

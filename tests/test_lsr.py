@@ -35,7 +35,8 @@ def test_format_matches_mktexlsr(tmp_path: Path) -> None:
     assert "./tex/latex/foo:\nfoo-extra.sty\nfoo.sty\n" in text
     assert "\n./fonts/tfm:\na.tfm\n" in text
     assert ".hidden" in text  # dotfiles are indexed, like mktexlsr does
-    assert ".git" not in text and "CVS" not in text
+    assert ".git" not in text
+    assert "CVS" not in text
     # the root lists ls-R itself, as it will exist after writing
     assert text.split("\n\n")[1].split("\n").count("ls-R") == 1
 
@@ -55,7 +56,8 @@ def test_symlinked_dirs_are_followed_but_loops_are_not(tmp_path: Path) -> None:
     (tmp_path / "tree" / "loop").symlink_to(tmp_path / "tree")
     text = lsr.render(tmp_path / "tree")
     assert "./link:\ns.tex\n" in text
-    assert text.count("./loop:") <= 1 and "./loop/loop" not in text
+    assert text.count("./loop:") <= 1
+    assert "./loop/loop" not in text
 
 
 def test_errors(tmp_path: Path) -> None:
@@ -68,20 +70,32 @@ def test_errors(tmp_path: Path) -> None:
 def test_kpathsea_finds_files_through_our_ls_r(tmp_path: Path) -> None:
     make_tree(tmp_path)
     lsr.write(tmp_path)
-    env = {**os.environ, "TEXMFCNF": str(tmp_path), "TEXMF": f"!!{tmp_path}", "TEXMFDBS": f"{tmp_path}"}
+    env = {
+        **os.environ,
+        "TEXMFCNF": str(tmp_path),
+        "TEXMF": f"!!{tmp_path}",
+        "TEXMFDBS": f"{tmp_path}",
+    }
     (tmp_path / "texmf.cnf").write_text(
         f"TEXMF = !!{tmp_path}\nTEXMFDBS = {{!!{tmp_path}}}\nTEXINPUTS = $TEXMF/tex//\n"
     )
     out = subprocess.run(
         ["kpsewhich", "-progname=latex", "foo.sty"],
-        env=env, capture_output=True, text=True, check=False,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert out.stdout.strip() == str(tmp_path / "tex/latex/foo/foo.sty"), out.stderr
 
 
-def test_command_indexes_the_texenv_trees(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_command_indexes_the_texenv_trees(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(os, "environ", os.environ.copy())  # texi sets TEXMF* for a standalone tree
+    monkeypatch.setattr(
+        os, "environ", os.environ.copy()
+    )  # texi sets TEXMF* for a standalone tree
     env = tmp_path / ".texenv"
     for d in ("texmf-dist/tex", "texmf-var", "texmf-local", "tlpkg"):
         (env / d).mkdir(parents=True)
@@ -98,7 +112,8 @@ def test_command_indexes_the_texenv_trees(tmp_path: Path, monkeypatch: pytest.Mo
     other = tmp_path / "other"
     other.mkdir()
     r = runner.invoke(cli.app, ["mktexlsr", str(other)])
-    assert r.exit_code == 0 and (other / "ls-R").is_file()
+    assert r.exit_code == 0
+    assert (other / "ls-R").is_file()
 
 
 def _standalone_env(root: Path) -> Path:
@@ -109,9 +124,13 @@ def _standalone_env(root: Path) -> Path:
     return env
 
 
-def test_activate_prints_only_shell_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_activate_prints_only_shell_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(os, "environ", {**os.environ, "PATH": "/usr/bin:/bin", "TEXINPUTS": "/x"})
+    monkeypatch.setattr(
+        os, "environ", {**os.environ, "PATH": "/usr/bin:/bin", "TEXINPUTS": "/x"}
+    )
     env = _standalone_env(tmp_path)
     r = runner.invoke(cli.app, ["activate", "--shell", "bash"])
     assert r.exit_code == 0, r.output
@@ -123,21 +142,31 @@ def test_activate_prints_only_shell_code(tmp_path: Path, monkeypatch: pytest.Mon
     assert all(l.startswith(("export ", "unset ")) for l in lines)  # safe to eval
     # every line is valid shell and puts the tree first
     out = subprocess.run(
-        ["sh", "-c", f'eval "$1"; echo "$PATH"; echo "$TEXI_ENV"', "sh", r.output],
-        capture_output=True, text=True, check=True,
+        ["sh", "-c", 'eval "$1"; echo "$PATH"; echo "$TEXI_ENV"', "sh", r.output],
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.splitlines()
-    assert out[0].startswith(f"{root}/bin/universal-darwin:") and out[1] == str(root)
+    assert out[0].startswith(f"{root}/bin/universal-darwin:")
+    assert out[1] == str(root)
 
 
-def test_activate_off_and_fish_and_no_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_activate_off_and_fish_and_no_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(os, "environ", {**os.environ, "PATH": "/usr/bin"})
-    assert runner.invoke(cli.app, ["activate"]).exit_code == 1  # no .texenv/: nothing on stdout
+    assert (
+        runner.invoke(cli.app, ["activate"]).exit_code == 1
+    )  # no .texenv/: nothing on stdout
     env = _standalone_env(tmp_path)
     root = env.resolve()
     off = runner.invoke(cli.app, ["activate", "--off", "--shell", "bash"]).output
-    assert "export PATH=/usr/bin" in off and "unset " in off and "TEXI_ENV" in off
+    assert "export PATH=/usr/bin" in off
+    assert "unset " in off
+    assert "TEXI_ENV" in off
     assert str(root / "bin") not in off.split("\n")[0]
     fish = runner.invoke(cli.app, ["activate", "--shell", "fish"]).output
     assert fish.startswith(f"set -gx PATH '{root}/bin/universal-darwin' '/usr/bin'")
-    assert "set -gx TEXMFROOT" in fish and "set -e TEXINPUTS" in fish
+    assert "set -gx TEXMFROOT" in fish
+    assert "set -e TEXINPUTS" in fish

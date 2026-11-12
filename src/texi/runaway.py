@@ -1,4 +1,4 @@
-"""Find the unclosed argument behind TeX's "File ended while scanning use of \\x".
+r"""Find the unclosed argument behind TeX's "File ended while scanning use of \\x".
 
 TeX reports the *end* of the run-away argument, which is the end of the file. The log
 also prints the start of the argument (``Runaway argument? {2026-03-28 \\par ...``).
@@ -58,9 +58,7 @@ def runaway_text(stack: list[str]) -> str | None:
     return None
 
 
-def locate(
-    runaway: str, macro: str | None, sources: dict[str, str]
-) -> Located | None:
+def locate(runaway: str, macro: str | None, sources: dict[str, str]) -> Located | None:
     """Find where the run-away argument ``runaway`` starts.
 
     Parameters
@@ -77,7 +75,7 @@ def locate(
     Located | None
         The best match, or None if no source has the argument.
     """
-    token = runaway.split()[0] if runaway.split() else ""
+    token = runaway.split(maxsplit=1)[0] if runaway.split() else ""
     if not token.startswith("{") or len(token) < 2:
         return None
     wanted = re.escape(token[1:])

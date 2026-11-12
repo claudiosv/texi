@@ -1,20 +1,20 @@
 import asyncio
-import json
 import getpass
+import json
 import os
-import shlex
 import re
-import textwrap
+import shlex
 import shutil
 import sqlite3
 import subprocess
 import sys
+import textwrap
 import time
 import tomllib
-from enum import Enum
 from collections.abc import Callable
+from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import inflect
 import sh
@@ -24,25 +24,25 @@ from pyclack.prompts import Option, confirm, note, outro, select
 from pyclack.utils.console import console
 from pyclack.utils.styling import S_BAR_START, Color
 from pydantic import ValidationError
-from rich.console import Console
 from rich.filesize import decimal
 from rich.markup import escape
 from rich.text import Text
 from rich.tree import Tree
 
-from texi import archive, deptree, latexmk_files, logparse_bib, lsr, pdffonts, runaway, texenv, texfmt, tools, unused as unused_mod
-from texi import tlpdb as tlpdb_mod
-from texi.logparse_texfmt import parse_texfmt
-from texi.ctan import CtanClient
-from texi.logparse import (
-    Diagnostic,
-    dedupe,
-    missing_package,
-    guess_lines,
-    parse_blg,
-    parse_latexmk,
-    parse_tex_log,
+from texi import (
+    archive,
+    deptree,
+    latexmk_files,
+    logparse_bib,
+    lsr,
+    pdffonts,
+    runaway,
+    texenv,
+    texfmt,
+    tools,
 )
+from texi import tlpdb as tlpdb_mod
+from texi import unused as unused_mod
 from texi.config import (
     BuildConfig,
     GoMode,
@@ -50,6 +50,20 @@ from texi.config import (
     TexFmtConfig,
     TexProjectConfig,
 )
+from texi.ctan import CtanClient
+from texi.logparse import (
+    Diagnostic,
+    dedupe,
+    guess_lines,
+    missing_package,
+    parse_blg,
+    parse_latexmk,
+    parse_tex_log,
+)
+from texi.logparse_texfmt import parse_texfmt
+
+if TYPE_CHECKING:
+    from rich.console import Console
 
 app = typer.Typer(
     help=(
@@ -98,12 +112,12 @@ def _debug_cmd(cmd: list[str], out: Console | None = None) -> None:
 
 
 def _intro(title: str) -> None:
-    """pyclack's intro bar, minus its console.clear() (which wipes build logs)."""
+    """Pyclack's intro bar, minus its console.clear() (which wipes build logs)."""
     console.print(Text.from_markup(f"{Color.gray(S_BAR_START)}  {title}"))
 
 
 def _note(title: str, content: list[str]) -> None:
-    """pyclack note, with lines wrapped so the box fits the terminal."""
+    """Pyclack note, with lines wrapped so the box fits the terminal."""
     width = max(20, console.width - 8)
     lines = [w for line in content for w in textwrap.wrap(line, width) or [""]]
     note(title=title, content=lines)
@@ -132,7 +146,11 @@ def _texenv_vars(env_dir: Path) -> dict[str, str]:
     root = env_dir.resolve()
     if (bin_dir := texenv.env_bin(env_dir)) is not None and _standalone(env_dir):
         # no PATH: callers put bin/<arch> in front of their own
-        return {k: v for k, v in texenv.clone_env(root, bin_dir.name, {}).items() if k != "PATH"}
+        return {
+            k: v
+            for k, v in texenv.clone_env(root, bin_dir.name, {}).items()
+            if k != "PATH"
+        }
     return {
         "TEXMFHOME": str(root),
         "TEXMFVAR": str(root / "texmf-var"),
@@ -180,7 +198,9 @@ def _peek_project() -> ProjectConfig | None:
     """The cwd's [project] table if texproject.toml is readable; None otherwise (no errors)."""
     path = Path.cwd() / "texproject.toml"
     try:
-        return TexProjectConfig(**tomllib.loads(path.read_text(encoding="utf-8"))).project
+        return TexProjectConfig(
+            **tomllib.loads(path.read_text(encoding="utf-8"))
+        ).project
     except OSError, tomllib.TOMLDecodeError, ValidationError:
         return None
 
@@ -314,7 +334,7 @@ def _perl_str(value: str) -> str:
 
 def _search_path(dirs: list[str]) -> str:
     """BIBINPUTS/TEXINPUTS value: each dir searched recursively, then the defaults."""
-    parts = [d if os.path.isabs(d) else f"$root/{d.strip('/')}" for d in dirs]
+    parts = [d if Path(d).is_absolute() else f"$root/{d.strip('/')}" for d in dirs]
     return ":".join(f"{p}//" for p in parts) + ":"
 
 
@@ -348,7 +368,7 @@ def render_latexmkrc(config: TexProjectConfig) -> str:
         if settings.get("pdf_update_method") is None:
             settings["pdf_update_method"] = "auto"
 
-    in_subdir = config.src_dir not in ("", ".")
+    in_subdir = config.src_dir not in {"", "."}
     rc_lines += [
         "use Cwd qw(abs_path);",
         "use File::Basename qw(dirname);",
@@ -359,7 +379,7 @@ def render_latexmkrc(config: TexProjectConfig) -> str:
         "    # only .texenv/ is on TeX's search path",
         f"    delete @ENV{{qw({' '.join(texenv.SCRUBBED)})}};",
         '    my $t = "$root/.texenv";',
-        '    $ENV{TEXMFROOT} = $t;',
+        "    $ENV{TEXMFROOT} = $t;",
         '    $ENV{TEXMFDIST} = "$t/texmf-dist";',
         '    $ENV{TEXMFLOCAL} = "$t/texmf-local";',
         '    $ENV{TEXMFHOME} = "$t/texmf-home";',
@@ -404,14 +424,14 @@ def render_latexmkrc(config: TexProjectConfig) -> str:
             continue
         if (
             in_subdir
-            and key in ("out_dir", "aux_dir", "out2_dir")
-            and not os.path.isabs(value)
+            and key in {"out_dir", "aux_dir", "out2_dir"}
+            and not Path(value).is_absolute()
         ):
             rc_lines.append(f'${key} = "$root/{value}";')
             continue
         if key == "default_files":
             continue  # emitted below, relative to the project root
-        if key in ("clean_ext", "clean_full_ext"):
+        if key in {"clean_ext", "clean_full_ext"}:
             rc_lines.append(f"${key} = '{' '.join(value)}';")  # space-separated string
             continue
 
@@ -485,9 +505,7 @@ def _reset_tlpdb_memo() -> None:
     _tlpdb_memo = _TLPDB_UNSET
 
 
-def _resolver_tlpdb(
-    console: Console, refresh: bool = False
-) -> tlpdb_mod.Tlpdb | None:
+def _resolver_tlpdb(console: Console, refresh: bool = False) -> tlpdb_mod.Tlpdb | None:
     """The TeX Live package index for name lookups, loaded once per process.
 
     Uses the cached index (building it from a download when there is none yet).
@@ -543,7 +561,10 @@ def _index_change(db: tlpdb_mod.Tlpdb) -> tuple[str, bool]:
     top_new, top_old = max(new.values(), default=0), max(old.values(), default=0)
     detail = f"{changed} changed, {added} new, {removed} removed"
     if top_new > top_old:
-        return f"Downloaded a newer package index (r{top_old} → r{top_new}; {detail})", True
+        return (
+            f"Downloaded a newer package index (r{top_old} → r{top_new}; {detail})",
+            True,
+        )
     if top_new < top_old:
         return (
             f"Downloaded an OLDER package index (r{top_new}, cached r{top_old}; "
@@ -761,8 +782,10 @@ def scan(
                     title=f"{len(missing)} possibly missing from texproject.toml",
                     content=[
                         escape(", ".join(missing)),
-                        "Packages covered by a collection (e.g. collection-latex) "
-                        "may be fine already.",
+                        (
+                            "Packages covered by a collection (e.g. collection-latex) "
+                            "may be fine already."
+                        ),
                         escape(f"Add with: texi add {' '.join(missing)}"),
                     ],
                 )
@@ -824,9 +847,7 @@ def init(
 
     try:
         config = TexProjectConfig(
-            project=ProjectConfig(
-                name=cwd.name, dependencies=dependencies
-            )
+            project=ProjectConfig(name=cwd.name, dependencies=dependencies)
         )
     except ValidationError as e:
         console.print("[red]Configuration Validation Error:[/red]")
@@ -902,7 +923,9 @@ def _clone_env_tree(repository: str | None) -> None:
     """Build a standalone .texenv/ from the archive store (no install-tl, no system TeX Live)."""
     env_dir = Path.cwd() / ".texenv"
     repo, _ = tlpdb_mod.resolve_repository(repository, None)
-    console.print("[blue]Cloning TeX Live into .texenv/ from the archive store...[/blue]")
+    console.print(
+        "[blue]Cloning TeX Live into .texenv/ from the archive store...[/blue]"
+    )
     texenv.init_clone(env_dir, repo)
     with ShimmerProgress(console) as prog:
         result = _archive_install(
@@ -1165,7 +1188,9 @@ def sync(
     config = load_project_config(Path.cwd() / "texproject.toml")
     _apply_project(config)
     if not no_upgrade:
-        _resolver_tlpdb(console, refresh=True)  # latest index: changed packages get updated
+        _resolver_tlpdb(
+            console, refresh=True
+        )  # latest index: changed packages get updated
     _sync(config.dependencies, no_upgrade=no_upgrade)
 
 
@@ -1376,7 +1401,7 @@ def _add_to_toml(path: Path, new: list[str]) -> None:
     """Append packages to the `dependencies` array, preserving the rest of the file."""
     text = path.read_text(encoding="utf-8")
     entries = "".join(f'  "{p}",\n' for p in new)
-    if m := re.search(r"^dependencies\s*=\s*\[(.*?)\]", text, re.M | re.S):
+    if m := re.search(r"^dependencies\s*=\s*\[(.*?)\]", text, re.MULTILINE | re.DOTALL):
         body = m.group(1).rstrip()
         if body and not body.endswith(","):
             body += ","
@@ -1384,7 +1409,7 @@ def _add_to_toml(path: Path, new: list[str]) -> None:
         text = text[: m.start(1)] + body + entries + text[m.end(1) :]
     else:  # top-level keys must precede any [table]
         block = f"dependencies = [\n{entries}]\n"
-        if h := re.search(r"^\[project\][^\n]*\n", text, re.M):
+        if h := re.search(r"^\[project\][^\n]*\n", text, re.MULTILINE):
             text = text[: h.end()] + block + text[h.end() :]
         else:
             text = f"[project]\n{block}\n" + text
@@ -1455,7 +1480,9 @@ def install(
     config = load_project_config(config_path)
     _apply_project(config)
     packages = _resolve_names(packages, "install")
-    locked = list(_read_lock(Path.cwd() / LOCK_NAME))  # keep earlier installs in texi.lock
+    locked = list(
+        _read_lock(Path.cwd() / LOCK_NAME)
+    )  # keep earlier installs in texi.lock
     _sync(packages, no_upgrade=True, keep=[*locked, *config.dependencies, *packages])
 
 
@@ -1490,12 +1517,12 @@ def _collect_diagnostics(config: TexProjectConfig, since: float) -> list[Diagnos
 
 
 def _explain_runaways(diags: list[Diagnostic], config: TexProjectConfig) -> None:
-    """For "File ended while scanning use of \\x": point at where the argument starts."""
+    r"""For "File ended while scanning use of \\x": point at where the argument starts."""
     todo = [
         d
         for d in diags
         if d.kind == "error"
-        and d.code in ("file-ended", "paragraph-ended")
+        and d.code in {"file-ended", "paragraph-ended"}
         and runaway.runaway_text(d.stack)
     ]
     if not todo:
@@ -1530,9 +1557,13 @@ def _resolve_biber_temp_files(
     temp = [d for d in diags if logparse_bib.is_biber_temp_name(d.file)]
     if not temp or not bcf.is_file():
         return
-    sources = logparse_bib.biber_temp_sources(bcf.read_text(encoding="utf-8", errors="replace"))
+    sources = logparse_bib.biber_temp_sources(
+        bcf.read_text(encoding="utf-8", errors="replace")
+    )
     for d in temp:
-        if (name := sources.get(d.file or "")) and (real := _find_project_file(name, config)):
+        if (name := sources.get(d.file or "")) and (
+            real := _find_project_file(name, config)
+        ):
             d.file = str(real)
             lines = real.read_text(encoding="utf-8", errors="replace").splitlines()
             d.hint = logparse_bib.explain_syntax(d, lines)
@@ -1571,6 +1602,8 @@ def _location(d: Diagnostic, config: TexProjectConfig) -> str:
         if not rel.parts or rel.parts[0] != "..":  # inside the project
             path = rel
     loc = os.path.normpath(path)
+    if not Path(loc).is_absolute() and not loc.startswith(".."):
+        loc = f"./{loc}"  # terminals detect a path more reliably with the ./
     if not d.line:
         return loc
     lines = f"{d.line}-{d.end_line}" if d.end_line else str(d.line)
@@ -1734,9 +1767,7 @@ def _watch_captured(
                 output = "".join(buf)
                 failed = _report(
                     config, started, output, guess, all_warnings=all_warnings
-                ) or (
-                    "Errors, in force_mode" in output or "Failure" in output
-                )
+                ) or ("Errors, in force_mode" in output or "Failure" in output)
                 if not failed:
                     _check_type3(config)
                 console.print(
@@ -1868,7 +1899,7 @@ def _run_latexmk(
     if DEBUG:
         console.print(f"[dim]latexmk: {escape(str(shutil.which('latexmk')))}[/dim]")
         changed = {k: v for k, v in env.items() if os.environ.get(k) != v}
-        if config.src_dir not in ("", "."):  # set by the generated .latexmkrc
+        if config.src_dir not in {"", "."}:  # set by the generated .latexmkrc
             src = f"{cwd}/{config.src_dir.strip('/')}//:"
             for k in ("BIBINPUTS", "TEXINPUTS"):
                 changed[f"{k} (in .latexmkrc)"] = src + os.environ.get(k, "")
@@ -1920,9 +1951,7 @@ def _run_latexmk(
                 all_warnings=all_warnings,
             )
             return
-        had_errors = _report(
-            config, started, output, guess, returncode, all_warnings
-        )
+        had_errors = _report(config, started, output, guess, returncode, all_warnings)
         if returncode != 0:
             if not had_errors:  # nothing parsed: show the tail
                 tail = "".join(output.splitlines(keepends=True)[-25:])
@@ -2098,9 +2127,7 @@ def fmt(
         help="Print nothing, not even tex-fmt's output; only the exit code reports failure. Not with --check.",
     ),
     trace: bool = typer.Option(False, "--trace", help="Show tex-fmt's trace messages."),
-    error: bool = typer.Option(
-        False, "--error", help="Show only errors."
-    ),
+    error: bool = typer.Option(False, "--error", help="Show only errors."),
     warn: bool = typer.Option(
         False, "--warn", help="Show errors and warnings (tex-fmt's default)."
     ),
@@ -2126,11 +2153,11 @@ def fmt(
         if on
     ]
     if len(levels) > 1:
-        raise typer.BadParameter(
-            "Use only one of --error, --warn, --info/--verbose and --trace."
-        )
+        msg = "Use only one of --error, --warn, --info/--verbose and --trace."
+        raise typer.BadParameter(msg)
     if quiet and check:
-        raise typer.BadParameter("--quiet cannot be combined with --check.")
+        msg = "--quiet cannot be combined with --check."
+        raise typer.BadParameter(msg)
     if not quiet:
         _intro("texi fmt")
     cwd = Path.cwd()
@@ -2179,10 +2206,16 @@ def fmt(
         text=True,
         stdout=subprocess.DEVNULL if quiet else None,
         # tex-fmt logs to stderr: captured and shown in texi's own style, unless --raw/--debug
-        stderr=subprocess.DEVNULL if quiet else None if (raw or DEBUG) else subprocess.PIPE,
+        stderr=subprocess.DEVNULL
+        if quiet
+        else None
+        if (raw or DEBUG)
+        else subprocess.PIPE,
     )
     if not quiet and not (raw or DEBUG):
-        diags = parse_texfmt(run.stderr or "", formatted=not check)  # the file changed unless --check
+        diags = parse_texfmt(
+            run.stderr or "", formatted=not check
+        )  # the file changed unless --check
         for d in diags:
             if d.file and not Path(d.file).is_absolute():
                 d.file = str(cwd / d.file)  # tex-fmt echoes the path as given
@@ -2207,7 +2240,7 @@ def fmt(
     )
 
 
-class ExportFormat(str, Enum):
+class ExportFormat(StrEnum):
     MARKDOWN = "markdown"  # pandoc
     HTML = "html"  # pandoc
     TEX4HT = "tex4ht"  # make4ht
@@ -2262,7 +2295,9 @@ def export(
         _ensure_make4ht()
     env_dir = cwd / ".texenv"
     if fmt is ExportFormat.EXPAND and not shutil.which(tool) and env_dir.exists():
-        console.print("[yellow]latexpand not found; installing it into .texenv/[/yellow]")
+        console.print(
+            "[yellow]latexpand not found; installing it into .texenv/[/yellow]"
+        )
         _archive_tools([tool], tool)
     if not shutil.which(tool):
         console.print(f"[red]{tool} not found.[/red] Try `{_EXPORT_HINTS[tool]}`.")
@@ -2290,8 +2325,17 @@ def export(
                 target = out_dir
                 # make4ht mangles absolute -B/-d paths (nests them under the build dir
                 # and leaves output in the source dir), so pass them relative to src.
-                rel = lambda p: os.path.relpath(p, src)  # noqa: E731
-                cmd = [tool, "-u", "-B", rel(aux_dir), "-d", rel(target), main, "mathml"]
+                rel = lambda p: os.path.relpath(p, src)  # ruff: ignore[lambda-assignment]
+                cmd = [
+                    tool,
+                    "-u",
+                    "-B",
+                    rel(aux_dir),
+                    "-d",
+                    rel(target),
+                    main,
+                    "mathml",
+                ]
             case ExportFormat.LATEXML:
                 target = out_dir / f"{name}.html"
                 cmd = [tool, main, f"--dest={target}"]
@@ -2304,7 +2348,9 @@ def export(
                 cmd, cwd=src, env=env, check=True
             )  # run in src_dir so \input/.bib resolve
         except subprocess.CalledProcessError as e:
-            console.print(f"\n[red]✖ {tool} failed on {escape(main)}. Check the logs above.[/red]")
+            console.print(
+                f"\n[red]✖ {tool} failed on {escape(main)}. Check the logs above.[/red]"
+            )
             raise typer.Exit(code=1) from e
         targets.append(target)
     shown = ", ".join(escape(str(t.relative_to(cwd))) for t in dict.fromkeys(targets))
@@ -2357,7 +2403,7 @@ def preview(
     )
 
 
-class FixMethod(str, Enum):
+class FixMethod(StrEnum):
     ADVISE = "advise"
     OUTLINE = "outline"
     REBUILD = "rebuild"
@@ -2735,7 +2781,9 @@ def outdated(debug: DebugOpt = False) -> None:
         raise typer.Exit(code=1)
     db = _resolver_tlpdb(console, refresh=True)
     if db is None:
-        console.print("[red]Package index unavailable (offline, no cached tlpdb).[/red]")
+        console.print(
+            "[red]Package index unavailable (offline, no cached tlpdb).[/red]"
+        )
         raise typer.Exit(code=1)
     standalone = _standalone(env_dir)
     roots = [*(texenv.CLONE_ROOTS if standalone else []), *config.dependencies]
@@ -2806,7 +2854,12 @@ def list_packages(
 def tree(
     depth: Annotated[
         int | None,
-        typer.Option("--depth", "-d", min=0, help="Show at most this many levels below each root."),
+        typer.Option(
+            "--depth",
+            "-d",
+            min=0,
+            help="Show at most this many levels below each root.",
+        ),
     ] = None,
     explicit: Annotated[
         bool,
@@ -2817,7 +2870,9 @@ def tree(
     ] = False,
     package: Annotated[
         str | None,
-        typer.Option("--package", "-p", help="Show only this package and its dependencies."),
+        typer.Option(
+            "--package", "-p", help="Show only this package and its dependencies."
+        ),
     ] = None,
     invert: Annotated[
         bool,
@@ -2858,7 +2913,9 @@ def tree(
     elif explicit:
         roots = sorted(d for d in config.dependencies if d in g.revisions)
         for d in sorted(set(config.dependencies) - set(g.revisions)):
-            console.print(f"[yellow]{escape(d)} is in texproject.toml but not installed.[/yellow]")
+            console.print(
+                f"[yellow]{escape(d)} is in texproject.toml but not installed.[/yellow]"
+            )
     else:
         roots = g.roots()
     if explicit and package is None:
@@ -2885,7 +2942,10 @@ def tree(
         (True, True): f"packages that depend on {package}"
         + (" (in texproject.toml)" if project_only else ""),
         (True, False): f"{package} and its dependencies",
-    }.get((package is not None, invert), "explicit dependencies" if explicit else "installed packages")
+    }.get(
+        (package is not None, invert),
+        "explicit dependencies" if explicit else "installed packages",
+    )
     root_tree = Tree(f"[bold]{escape(heading)}[/bold]", guide_style="bright_blue")
     for n in nodes:
         add(root_tree, n)
@@ -2927,7 +2987,9 @@ def unused(debug: DebugOpt = False) -> None:
             built = True
             paths.update(files.fls.resolved_inputs())
         if (log := aux / f"{name}.log").is_file():
-            paths |= unused_mod.log_paths(log.read_text(encoding="utf-8", errors="replace"), roots)
+            paths |= unused_mod.log_paths(
+                log.read_text(encoding="utf-8", errors="replace"), roots
+            )
     if not built:
         console.print(
             "[red]No build record found. Run `texi build` first: without it every package "
@@ -2958,7 +3020,9 @@ def _categories(env_dir: Path) -> dict[str, str]:
     """`name -> category` of the packages in the tree's tlpdb."""
     out: dict[str, str] = {}
     name = None
-    for line in (env_dir / "tlpkg" / "texlive.tlpdb").read_text(encoding="utf-8").splitlines():
+    for line in (
+        (env_dir / "tlpkg" / "texlive.tlpdb").read_text(encoding="utf-8").splitlines()
+    ):
         if line.startswith("name "):
             name = line[5:].strip()
         elif line.startswith("category ") and name:
@@ -2994,7 +3058,7 @@ def _print_unused(rep: unused_mod.Report) -> None:
         )
 
 
-class ShellName(str, Enum):
+class ShellName(StrEnum):
     BASH = "bash"
     ZSH = "zsh"
     SH = "sh"
@@ -3009,16 +3073,20 @@ def _shell_commands(
     root = str(env_dir.resolve())
     bin_s = str(bin_dir.resolve()) if bin_dir else ""
     # this process already has bin first (the callback activated it); the user's own PATH is the rest
-    others = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p and p != bin_s]
+    others = [
+        p for p in os.environ.get("PATH", "").split(os.pathsep) if p and p != bin_s
+    ]
     names = sorted(variables)
     lines: list[str] = []
     if shell is ShellName.FISH:
-        q = lambda v: "'" + v.replace("\\", "\\\\").replace("'", "\\'") + "'"  # noqa: E731
+        q = lambda v: "'" + v.replace("\\", "\\\\").replace("'", "\\'") + "'"  # ruff: ignore[lambda-assignment]
         if off:
             lines += [f"set -gx PATH {' '.join(q(p) for p in others)}"]
             lines += [f"set -e {n}" for n in [*names, "TEXI_ENV"]]
         else:
-            lines += [f"set -gx PATH {q(bin_s)} {' '.join(q(p) for p in others)}".rstrip()]
+            lines += [
+                f"set -gx PATH {q(bin_s)} {' '.join(q(p) for p in others)}".rstrip()
+            ]
             lines += [f"set -gx {n} {q(variables[n])}" for n in names]
             lines += [f"set -e {n}" for n in texenv.SCRUBBED] if bin_dir else []
             lines += [f"set -gx TEXI_ENV {q(root)}"]
@@ -3042,7 +3110,9 @@ def _shell_commands(
 def activate(
     shell: Annotated[
         ShellName | None,
-        typer.Option("--shell", help="Shell syntax. Default: from $SHELL (fish, else POSIX)."),
+        typer.Option(
+            "--shell", help="Shell syntax. Default: from $SHELL (fish, else POSIX)."
+        ),
     ] = None,
     off: Annotated[
         bool,
@@ -3055,7 +3125,11 @@ def activate(
         typer.echo("texi activate: no .texenv/ here. Run `texi sync`.", err=True)
         raise typer.Exit(code=1)
     if shell is None:
-        shell = ShellName.FISH if Path(os.environ.get("SHELL", "")).name == "fish" else ShellName.BASH
+        shell = (
+            ShellName.FISH
+            if Path(os.environ.get("SHELL", "")).name == "fish"
+            else ShellName.BASH
+        )
     variables = _texenv_vars(env_dir)
     variables.pop("PATH", None)
     typer.echo(_shell_commands(shell, env_dir, variables, off=off), nl=False)
@@ -3094,7 +3168,7 @@ app.registered_commands.sort(
     )
 )
 
-from texi.tlpdb_cli import cache_app  # noqa: E402
+from texi.tlpdb_cli import cache_app  # ruff: ignore[module-import-not-at-top-of-file]
 
 
 @cache_app.command("prune")
@@ -3114,7 +3188,9 @@ def cache_prune(
     env_dir = Path.cwd() / ".texenv"
     managed = archive.managed(env_dir)
     if not managed:
-        console.print("[red]No packages from the cache in .texenv/. Run `texi sync` first.[/red]")
+        console.print(
+            "[red]No packages from the cache in .texenv/. Run `texi sync` first.[/red]"
+        )
         raise typer.Exit(code=1)
     keep = {v["id"] for v in managed.values()}
     removed = archive.prune(keep, dry_run=dry_run)
@@ -3122,8 +3198,9 @@ def cache_prune(
         console.print(f"  {entry_id}  {size / 1e6:.1f} MB")
     total = sum(size for _, size in removed) / 1e6
     verb = "Would remove" if dry_run else "Removed"
-    outro(f"{verb} {len(removed)} {inflect_engine.plural('entry', len(removed))}, {total:.1f} MB")
-
+    outro(
+        f"{verb} {len(removed)} {inflect_engine.plural('entry', len(removed))}, {total:.1f} MB"
+    )
 
 
 app.add_typer(cache_app, name="cache", rich_help_panel="Cache")

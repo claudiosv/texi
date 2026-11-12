@@ -350,11 +350,15 @@ def suggestion_text() -> list[str]:
     """How to get rid of Type 3 fonts, as plain lines."""
     return [
         "ACM does not accept Type 3 fonts.",
-        '(a) matplotlib: set plt.rcParams["pdf.fonttype"] = 42 and '
-        'plt.rcParams["ps.fonttype"] = 42 (or `pdf.fonttype : 42` in matplotlibrc), '
-        "then re-export the figure.",
-        "(b) bitmap/PK fonts: install Type 1 fonts (texi add cm-super), use "
-        "\\usepackage[T1]{fontenc}, and set pdf_mode to pdflatex or lualatex "
-        "instead of ps2pdf/dvi.",
+        (
+            '(a) matplotlib: set plt.rcParams["pdf.fonttype"] = 42 and '
+            'plt.rcParams["ps.fonttype"] = 42 (or `pdf.fonttype : 42` in matplotlibrc), '
+            "then re-export the figure."
+        ),
+        (
+            "(b) bitmap/PK fonts: install Type 1 fonts (texi add cm-super), use "
+            "\\usepackage[T1]{fontenc}, and set pdf_mode to pdflatex or lualatex "
+            "instead of ps2pdf/dvi."
+        ),
         "(c) vector Type 3 fonts in an existing PDF: run texi fix-pdf -m outline.",
     ]

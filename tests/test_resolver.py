@@ -85,7 +85,9 @@ def test_diamond_order() -> None:
     r = res(db, ["top"])
     assert r.order == ["base", "left", "right", "top"]
     assert r.edges["top"] == ["left", "right"]
-    assert r.cycles == [] and r.missing == {} and r.skipped == {}
+    assert r.cycles == []
+    assert r.missing == {}
+    assert r.skipped == {}
     assert r.why("base") == ["top", "left", "base"]
     assert r.why("top") == ["top"]
     assert r.why("elsewhere") == []
@@ -106,7 +108,9 @@ def test_cycle_is_tolerated_and_reported() -> None:
 
 def test_self_dependency_ignored() -> None:
     r = res(FakeDb(Pkg("a", ["a", "b"]), Pkg("b", ["b"])), ["a"])
-    assert r.order == ["b", "a"] and r.cycles == [] and r.edges["a"] == ["b"]
+    assert r.order == ["b", "a"]
+    assert r.cycles == []
+    assert r.edges["a"] == ["b"]
 
 
 @pytest.mark.parametrize("seed", range(6))
@@ -157,10 +161,12 @@ def test_arch_expansion_for_two_archs() -> None:
 def test_missing_arch_package_is_skipped_not_an_error() -> None:
     db = FakeDb(Pkg("tool", ["tool.ARCH"]), Pkg("tool.universal-darwin"))
     r = res(db, ["tool"], arch="windows", strict=True)
-    assert r.order == ["tool"] and r.missing == {}
+    assert r.order == ["tool"]
+    assert r.missing == {}
     assert "windows" in r.skipped["tool.windows"]
     unknown = res(db, ["tool"], arch=None)
-    assert unknown.order == ["tool"] and "tool.ARCH" in unknown.skipped
+    assert unknown.order == ["tool"]
+    assert "tool.ARCH" in unknown.skipped
 
 
 def test_foreign_arch_explicit_dependency_skipped() -> None:
@@ -182,9 +188,11 @@ def test_pseudo_records_never_become_edges() -> None:
     r = res(db, ["00texlive.config", "a"], strict=True)
     assert r.order == ["b", "a"]
     assert r.skipped == {"00texlive.config": resolver.REASON_METADATA}
-    assert "00texlive.config" not in r.edges and r.missing == {}
+    assert "00texlive.config" not in r.edges
+    assert r.missing == {}
     assert all(is_pseudo_record("00texlive.config", d) for d in CONFIG_LINES)
-    assert is_pseudo_record("x", "release/2026") and is_pseudo_record("x", "a:b")
+    assert is_pseudo_record("x", "release/2026")
+    assert is_pseudo_record("x", "a:b")
     assert not is_pseudo_record("x", "foo.ARCH")
     # a non-00texlive owner with pseudo-looking values: ignored too
     odd = FakeDb(Pkg("p", ["release/2026", "opt_x:1", "q"]), Pkg("q"))
@@ -200,7 +208,9 @@ def test_parsed_config_entry_has_no_dependency_edges() -> None:
     )
     db = tlpdb.parse_tlpdb(text)
     cfg = db.get("00texlive.config")
-    assert cfg is not None and cfg.depends == [] and cfg.settings == CONFIG_LINES
+    assert cfg is not None
+    assert cfg.depends == []
+    assert cfg.settings == CONFIG_LINES
     assert db.available_architectures() == [
         "aarch64-linux",
         "amd64-freebsd",
@@ -276,5 +286,6 @@ def test_closure_of_large_chain_is_iterative() -> None:
     db = FakeDb(*(Pkg(f"p{i:04d}", [f"p{i + 1:04d}"]) for i in range(n)), Pkg("end"))
     db.pkgs[f"p{n - 1:04d}"].depends = ["end"]
     r = res(db, ["p0000"])
-    assert len(r.order) == n + 1 and r.order[0] == "end"
+    assert len(r.order) == n + 1
+    assert r.order[0] == "end"
     assert len(r.why("end")) == n + 1

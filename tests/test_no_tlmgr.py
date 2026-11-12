@@ -9,10 +9,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from test_archive import REPO, _db_text, make_client
 from typer.testing import CliRunner
 
-from texi import cli, texenv, tlpdb, tools
-from test_archive import REPO, _db_text, make_client
+from texi import cli, texenv, tlpdb
 
 runner = CliRunner()
 _REAL_RESOLVER_TLPDB = cli._resolver_tlpdb  # the fixtures replace it
@@ -215,7 +215,7 @@ def test_sync_never_runs_tlmgr(project: Path, shims: Path) -> None:
     texenv.init_usertree(project / ".texenv", REPO)  # an existing usertree stays one
     r = runner.invoke(cli.app, ["sync"])
     assert r.exit_code == 0, r.output
-    assert not shims.exists(), shims.read_text()
+    assert not shims.exists(), shims.read_text(encoding="utf-8")
     env = project / ".texenv"
     assert (env / "tex/latex/foo/foo.sty").exists()
     assert (env / "tex/latex/bar/bar.sty").exists()
@@ -223,7 +223,8 @@ def test_sync_never_runs_tlmgr(project: Path, shims: Path) -> None:
     # sysdep is provided by the system tlpdb and must not be installed
     assert not (env / "tlpkg/tlpobj/sysdep.tlpobj").exists()
     lock = (project / "texi.lock").read_text()
-    assert 'texlive = "2026"' in lock and "foo = 100" in lock
+    assert 'texlive = "2026"' in lock
+    assert "foo = 100" in lock
     # a second sync is a no-op and still does not touch tlmgr
     r = runner.invoke(cli.app, ["sync"])
     assert r.exit_code == 0, r.output
@@ -239,7 +240,7 @@ def test_sync_clones_standalone_tree(
     )
     r = runner.invoke(cli.app, ["sync"])
     assert r.exit_code == 0, r.output
-    assert not shims.exists(), shims.read_text()
+    assert not shims.exists(), shims.read_text(encoding="utf-8")
     env = project / ".texenv"
     assert not texenv.is_usertree(env)
     assert cli._standalone(env)
@@ -248,7 +249,8 @@ def test_sync_clones_standalone_tree(
     for d in ("texmf-var", "texmf-config", "texmf-local", "texmf-home"):
         assert (env / d).is_dir()
     db = (env / "tlpkg/texlive.tlpdb").read_text()
-    assert "00texlive.installation" in db and "setting_usertree" not in db
+    assert "00texlive.installation" in db
+    assert "setting_usertree" not in db
     # a second sync keeps the tree
     r = runner.invoke(cli.app, ["sync"])
     assert r.exit_code == 0, r.output
@@ -262,7 +264,8 @@ def test_clone_env_scrubs_and_points_into_tree(tmp_path: Path) -> None:
         {"PATH": "/usr/bin", "TEXINPUTS": "/x", "TEXMFHOME": "/home/x", "HOME": "/h"},
     )
     root = (tmp_path / ".texenv").resolve()
-    assert "TEXINPUTS" not in env and env["HOME"] == "/h"
+    assert "TEXINPUTS" not in env
+    assert env["HOME"] == "/h"
     assert env["TEXMFHOME"] == str(root / "texmf-home")
     assert env["TEXMFCNF"] == str(root / "texmf-dist/web2c")
     assert env["TEXMFSYSVAR"] == env["TEXMFVAR"] == str(root / "texmf-var")
@@ -378,8 +381,10 @@ def test_all_warnings_flag_lists_everything(
     short = capsys.readouterr().out
     cli._print_diagnostics(diags, config, all_warnings=True)
     full = capsys.readouterr().out
-    assert "5 more warnings" in short and "--all-warnings" in short
-    assert "more warnings" not in full and "w19" in full
+    assert "5 more warnings" in short
+    assert "--all-warnings" in short
+    assert "more warnings" not in full
+    assert "w19" in full
 
 
 def test_fmt_skips_texenv_and_build_dirs(
@@ -403,7 +408,8 @@ def test_fmt_skips_texenv_and_build_dirs(
     r = runner.invoke(cli.app, ["fmt", "--check"])
     assert r.exit_code == 0, r.output
     names = sorted(Path(p).relative_to(project).as_posix() for p in seen)
-    assert "a.tex" in names and "sec/b.tex" in names
+    assert "a.tex" in names
+    assert "sec/b.tex" in names
     assert not any(n.startswith((".texenv", "build")) for n in names), names
 
 
@@ -427,11 +433,15 @@ def test_outdated_lists_newer_revisions_and_installs_nothing(
     before = sorted(p.name for p in (project / ".texenv/tlpkg/tlpobj").iterdir())
     r = runner.invoke(cli.app, ["outdated"])
     assert r.exit_code == 0, r.output
-    assert "foo" in r.output and "r100" in r.output and "r101" in r.output
+    assert "foo" in r.output
+    assert "r100" in r.output
+    assert "r101" in r.output
     assert calls == [True]  # asked for a fresh index
     assert not shims.exists()
-    assert before == sorted(p.name for p in (project / ".texenv/tlpkg/tlpobj").iterdir())
-    assert 'foo = 100' in (project / "texi.lock").read_text()  # nothing was installed
+    assert before == sorted(
+        p.name for p in (project / ".texenv/tlpkg/tlpobj").iterdir()
+    )
+    assert "foo = 100" in (project / "texi.lock").read_text()  # nothing was installed
 
 
 def test_sync_refreshes_the_index_unless_no_upgrade(
@@ -458,7 +468,9 @@ def test_sync_says_where_the_index_comes_from(
 ) -> None:
     texenv.init_usertree(project / ".texenv", REPO)
     db = tlpdb.parse_tlpdb(_db_text())
-    db.source = "https://mirrors.example/CTAN/systems/texlive/tlnet/tlpkg/texlive.tlpdb.xz"
+    db.source = (
+        "https://mirrors.example/CTAN/systems/texlive/tlnet/tlpkg/texlive.tlpdb.xz"
+    )
     db.from_cache = False
     db.offline = False
 
@@ -472,7 +484,9 @@ def test_sync_says_where_the_index_comes_from(
     cli._reset_tlpdb_memo()
     r = runner.invoke(cli.app, ["sync"])
     assert r.exit_code == 0, r.output
-    assert f"Fetching the latest package index from {REPO}" in " ".join(r.output.split())
+    assert f"Fetching the latest package index from {REPO}" in " ".join(
+        r.output.split()
+    )
     flat = " ".join(r.output.split())  # the console wraps long lines
     assert "Downloaded the package index (via https://mirrors.example/CTAN" in flat
     cli._reset_tlpdb_memo()
@@ -485,11 +499,13 @@ def test_sync_says_where_the_index_comes_from(
     db.previous_revisions = {**{n: r - 1 for n, r in db.revisions().items()}, "gone": 1}
     flat = " ".join(runner.invoke(cli.app, ["sync"]).output.split())
     assert f"Downloaded a newer package index (r{top - 1} → r{top};" in flat
-    assert "1 removed" in flat and "0 new" in flat
+    assert "1 removed" in flat
+    assert "0 new" in flat
     cli._reset_tlpdb_memo()
     db.previous_revisions = {n: r + 1000 for n, r in db.revisions().items()}
     flat = " ".join(runner.invoke(cli.app, ["sync"]).output.split())
-    assert "OLDER package index" in flat and "stale" in flat
+    assert "OLDER package index" in flat
+    assert "stale" in flat
     cli._reset_tlpdb_memo()
     db.changed = False
     flat = " ".join(runner.invoke(cli.app, ["sync"]).output.split())
@@ -501,5 +517,6 @@ def test_sync_says_where_the_index_comes_from(
     cli._reset_tlpdb_memo()
     db.offline = True
     r = runner.invoke(cli.app, ["sync"])
-    assert "Could not reach" in r.output and "cached package index" in r.output
+    assert "Could not reach" in r.output
+    assert "cached package index" in r.output
     cli._reset_tlpdb_memo()

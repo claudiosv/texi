@@ -5,8 +5,9 @@ import lzma
 import os
 import sqlite3
 import urllib.error
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Never, Self
 
 import pytest
 from typer.testing import CliRunner
@@ -132,7 +133,7 @@ def test_search_name_prefix_before_substring(db: tl.Tlpdb) -> None:
 def test_search_description_and_catalogue(db: tl.Tlpdb) -> None:
     hits = db.search("hexadecimal")
     assert [h.package.name for h in hits] == ["kastrup"]
-    assert hits[0].matched_on in ("shortdesc", "longdesc")
+    assert hits[0].matched_on in {"shortdesc", "longdesc"}
     assert db.search("binhex")[0].package.name == "kastrup"
     assert db.search("binhex")[0].matched_on == "catalogue"
     assert db.search("hexadecimal", in_desc=False) == []
@@ -174,9 +175,12 @@ def test_file_lookups(db: tl.Tlpdb) -> None:
 
 
 def test_name_and_description_lookups(db: tl.Tlpdb) -> None:
-    assert db.has("kastrup") and not db.has("binhex")
-    assert len(db.names()) == 9 and db.count() == 9 == len(db.packages)
-    assert "kastrup" in db.packages and "binhex" not in db.packages
+    assert db.has("kastrup")
+    assert not db.has("binhex")
+    assert len(db.names()) == 9
+    assert db.count() == 9 == len(db.packages)
+    assert "kastrup" in db.packages
+    assert "binhex" not in db.packages
     with pytest.raises(KeyError):
         db.packages["binhex"]
     assert db.shortdesc(["kastrup", "nope"]) == {
@@ -194,7 +198,8 @@ def test_name_and_description_lookups(db: tl.Tlpdb) -> None:
 
 def test_search_hit_is_summary(db: tl.Tlpdb) -> None:
     hit = db.search("kastrup")[0]
-    assert hit.package.name == "kastrup" and hit.package.catalogue_key == "binhex"
+    assert hit.package.name == "kastrup"
+    assert hit.package.catalogue_key == "binhex"
     assert hit.package.files == {}
     assert db.get("kastrup").files  # type: ignore[union-attr]
 
@@ -226,8 +231,10 @@ def test_search_like_fallback_matches_fts(
 
 
 def test_search_special_characters_are_literal(db: tl.Tlpdb) -> None:
-    assert db.search("%") == [] and db.search("k%p") == []
-    assert db.search("kast_up") == [] and db.search("kast_up", in_files=True) == []
+    assert db.search("%") == []
+    assert db.search("k%p") == []
+    assert db.search("kast_up") == []
+    assert db.search("kast_up", in_files=True) == []
     assert [h.package.name for h in db.search('"xz"')] == ["00texlive.config"]
     assert db.search("binhex.tex", in_files=True)  # "." is not a wildcard
     assert db.search("binhexXtex", in_files=True) == []
@@ -247,7 +254,8 @@ def test_stats(db: tl.Tlpdb) -> None:
         st.with_binfiles == 3
     )  # 00texlive.installer, latexmk.universal-darwin, .windows
     assert "windows" in st.architectures
-    assert st.files["runfiles"] > 0 and st.files["binfiles"] > 0
+    assert st.files["runfiles"] > 0
+    assert st.files["binfiles"] > 0
     assert st.files["srcfiles"] >= 3
 
 
@@ -288,7 +296,7 @@ class FakeResp(io.BytesIO):
     def geturl(self) -> str:
         return self._url
 
-    def __enter__(self) -> "FakeResp":
+    def __enter__(self) -> Self:
         return self
 
 
@@ -324,13 +332,16 @@ def test_remote_download_then_cache_hit(
     assert db.source == FINAL  # the redirected URI
     assert db.repository == REPO
     assert not db.from_cache
-    assert db.cache_path is not None and db.cache_path.parent == cache
+    assert db.cache_path is not None
+    assert db.cache_path.parent == cache
     assert db.cache_path.is_file()
     assert db.compressed_bytes == len(_xz())
 
     db2 = tl.load(REPO)  # fresh: no network
     assert len(calls) == 1
-    assert db2.from_cache and db2.source == FINAL and not db2.offline
+    assert db2.from_cache
+    assert db2.source == FINAL
+    assert not db2.offline
 
 
 def test_remote_stale_cache_conditional_get_304(
@@ -347,17 +358,18 @@ def test_remote_stale_cache_conditional_get_304(
 
     seen: dict[str, str | None] = {}
 
-    def fake304(req, timeout):  # type: ignore[no-untyped-def]
+    def fake304(req, timeout) -> Never:  # type: ignore[no-untyped-def]
         seen["inm"] = req.get_header("If-none-match")
         raise urllib.error.HTTPError(req.full_url, 304, "Not Modified", {}, None)  # type: ignore[arg-type]
 
     monkeypatch.setattr(tl, "urlopen", fake304)
     db = tl.load(REPO)
     assert seen["inm"] == '"abc"'
-    assert db.from_cache and not db.offline
+    assert db.from_cache
+    assert not db.offline
     assert len(db.packages) == 9
     assert db.fetched is not None
-    assert (datetime.now(timezone.utc) - db.fetched).total_seconds() < 60  # revalidated
+    assert (datetime.now(UTC) - db.fetched).total_seconds() < 60  # revalidated
 
     # --refresh forces a request even when fresh
     seen.clear()
@@ -371,18 +383,21 @@ def test_remote_offline_uses_cache(
     monkeypatch.setattr(tl, "urlopen", lambda req, timeout: FakeResp(_xz(), FINAL, {}))
     tl.load(REPO)
 
-    def boom(req, timeout):  # type: ignore[no-untyped-def]
-        raise urllib.error.URLError("no network")
+    def boom(req, timeout) -> Never:  # type: ignore[no-untyped-def]
+        msg = "no network"
+        raise urllib.error.URLError(msg)
 
     monkeypatch.setattr(tl, "urlopen", boom)
     db = tl.load(REPO, refresh=True)
-    assert db.from_cache and db.offline
+    assert db.from_cache
+    assert db.offline
     assert len(db.packages) == 9
 
 
 def test_remote_offline_no_cache(cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def boom(req, timeout):  # type: ignore[no-untyped-def]
-        raise urllib.error.URLError("no network")
+    def boom(req, timeout) -> Never:  # type: ignore[no-untyped-def]
+        msg = "no network"
+        raise urllib.error.URLError(msg)
 
     monkeypatch.setattr(tl, "urlopen", boom)
     with pytest.raises(tl.TlpdbError, match="offline"):
@@ -408,8 +423,9 @@ def _prime(monkeypatch: pytest.MonkeyPatch) -> tl.Tlpdb:
 
 
 def _no_network(monkeypatch: pytest.MonkeyPatch) -> None:
-    def boom(req, timeout):  # type: ignore[no-untyped-def]
-        raise AssertionError("network used")
+    def boom(req, timeout) -> Never:  # type: ignore[no-untyped-def]
+        msg = "network used"
+        raise AssertionError(msg)
 
     monkeypatch.setattr(tl, "urlopen", boom)
 
@@ -428,7 +444,8 @@ def test_index_layout(cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     con = sqlite3.connect(db.index_path)
     assert con.execute("PRAGMA user_version").fetchone()[0] == tl.SCHEMA_VERSION
     meta = dict(con.execute("SELECT key, value FROM meta"))
-    assert meta["source"] == FINAL and meta["repository"] == REPO
+    assert meta["source"] == FINAL
+    assert meta["repository"] == REPO
     assert meta["schema"] == str(tl.SCHEMA_VERSION)
     assert int(meta["compressed_bytes"]) == len(_xz())
     assert int(meta["unpacked_bytes"]) == FIXTURE.stat().st_size
@@ -447,15 +464,18 @@ def test_cached_run_does_not_parse_text(
     _prime(monkeypatch)
     _no_network(monkeypatch)
 
-    def no_parse(text):  # type: ignore[no-untyped-def]
-        raise AssertionError("text parsed")
+    def no_parse(text) -> Never:  # type: ignore[no-untyped-def]
+        msg = "text parsed"
+        raise AssertionError(msg)
 
     monkeypatch.setattr(tl, "_parse_packages", no_parse)
     db = tl.load(REPO)
-    assert db.from_cache and db.get("kastrup") is not None
+    assert db.from_cache
+    assert db.get("kastrup") is not None
     assert db.stats().entries == 9
     assert db.packages_for_file("binhex.tex") == ["kastrup"]
-    assert db.source == FINAL and db.compressed_bytes == len(_xz())
+    assert db.source == FINAL
+    assert db.compressed_bytes == len(_xz())
 
 
 def test_schema_bump_rebuilds_from_xz_offline(
@@ -466,7 +486,8 @@ def test_schema_bump_rebuilds_from_xz_offline(
     monkeypatch.setattr(tl, "SCHEMA_VERSION", tl.SCHEMA_VERSION + 1)
     db = tl.load(REPO)  # fresh cache: no request, index rebuilt from the .xz
     assert db.schema_version == tl.SCHEMA_VERSION
-    assert db.from_cache and not db.offline
+    assert db.from_cache
+    assert not db.offline
     assert db.source == FINAL
     assert len(db.packages) == 9
 
@@ -478,19 +499,22 @@ def test_corrupt_index_is_rebuilt(cache: Path, monkeypatch: pytest.MonkeyPatch) 
     db.index_path.write_bytes(b"this is not a database" * 100)
     _no_network(monkeypatch)
     db2 = tl.load(REPO)
-    assert len(db2.packages) == 9 and db2.get("kastrup") is not None
+    assert len(db2.packages) == 9
+    assert db2.get("kastrup") is not None
 
 
 def test_corrupt_index_and_xz_redownloads(
     cache: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     db = _prime(monkeypatch)
-    assert db.index_path is not None and db.cache_path is not None
+    assert db.index_path is not None
+    assert db.cache_path is not None
     db.close()
     db.index_path.write_bytes(b"garbage")
     db.cache_path.write_bytes(b"\xfd7zXZ\x00garbage")
     db2 = _prime(monkeypatch)  # fresh sidecar, but nothing usable: downloads again
-    assert not db2.from_cache and len(db2.packages) == 9
+    assert not db2.from_cache
+    assert len(db2.packages) == 9
     # and with no network at all that is an error
     db2.close()
     db2.index_path.write_bytes(b"garbage")  # type: ignore[union-attr]
@@ -508,7 +532,7 @@ def test_index_is_replaced_atomically(
     calls: list[tuple[Path, Path]] = []
     real = os.replace
 
-    def spy(src, dst):  # type: ignore[no-untyped-def]
+    def spy(src, dst) -> None:  # type: ignore[no-untyped-def]
         calls.append((Path(src), Path(dst)))
         if str(dst).endswith(".sqlite"):
             assert Path(src).is_file()  # complete before it becomes visible
@@ -518,22 +542,25 @@ def test_index_is_replaced_atomically(
     monkeypatch.setattr(tl.os, "replace", spy)
     _prime(monkeypatch)
     ((src, dst),) = [c for c in calls if str(c[1]).endswith(".sqlite")]
-    assert src.parent == dst.parent and src != dst
+    assert src.parent == dst.parent
+    assert src != dst
     assert not src.exists()
 
 
 def test_failed_build_leaves_no_partial_index(
     cache: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def broken(conn, packages, meta):  # type: ignore[no-untyped-def]
+    def broken(conn, packages, meta) -> Never:  # type: ignore[no-untyped-def]
         conn.execute("CREATE TABLE half(x)")
-        raise sqlite3.OperationalError("disk full")
+        msg = "disk full"
+        raise sqlite3.OperationalError(msg)
 
     monkeypatch.setattr(tl, "_populate", broken)
     monkeypatch.setattr(tl, "urlopen", lambda req, timeout: FakeResp(_xz(), FINAL, {}))
     with pytest.raises(tl.TlpdbError, match="cannot build the index"):
         tl.load(REPO)
-    assert not list(cache.glob("*.sqlite")) and not list(cache.glob(".*"))
+    assert not list(cache.glob("*.sqlite"))
+    assert not list(cache.glob(".*"))
 
 
 def test_stale_index_after_304_uses_new_fetch_time(
@@ -545,14 +572,15 @@ def test_stale_index_after_304_uses_new_fetch_time(
     data["fetched"] -= 3 * 24 * 3600
     meta.write_text(json.dumps(data))
 
-    def fake304(req, timeout):  # type: ignore[no-untyped-def]
+    def fake304(req, timeout) -> Never:  # type: ignore[no-untyped-def]
         raise urllib.error.HTTPError(req.full_url, 304, "Not Modified", {}, None)  # type: ignore[arg-type]
 
     monkeypatch.setattr(tl, "urlopen", fake304)
     db = tl.load(REPO)
     assert db.fetched is not None
-    assert (datetime.now(timezone.utc) - db.fetched).total_seconds() < 60
-    assert tl.has_cache(REPO) and not tl.has_cache(REPO + "/other")
+    assert (datetime.now(UTC) - db.fetched).total_seconds() < 60
+    assert tl.has_cache(REPO)
+    assert not tl.has_cache(REPO + "/other")
 
 
 def _system(location: str) -> tl.SystemTexLive:
@@ -620,9 +648,11 @@ def test_cli_stats() -> None:
         r = cli(*args)
         assert r.exit_code == 0, r.output
         assert str(FIXTURE.resolve()) in r.output.replace("\n", "")
-        assert "Entries" in r.output and "9" in r.output
+        assert "Entries" in r.output
+        assert "9" in r.output
         assert "TeX Live 2026" in r.output
-        assert "Package" in r.output and "TLCore" in r.output
+        assert "Package" in r.output
+        assert "TLCore" in r.output
         assert "binfiles" in r.output
         assert "Index" not in r.output  # --local is an in-memory index
 
@@ -630,26 +660,28 @@ def test_cli_stats() -> None:
 def test_cli_search() -> None:
     r = cli("search", "hexadecimal", "--local", str(FIXTURE))
     assert r.exit_code == 0, r.output
-    assert "kastrup" in r.output and "(CTAN: binhex)" in r.output
+    assert "kastrup" in r.output
+    assert "(CTAN: binhex)" in r.output
 
 
 def test_cli_search_file_regex_exact_limit() -> None:
     r = cli("search", "binhex.tex", "-f", "--local", str(FIXTURE))
     assert r.exit_code == 0, r.output
-    assert (
-        "kastrup" in r.output
-        and "texmf-dist/tex/generic/kastrup/binhex.tex" in r.output
-    )
+    assert "kastrup" in r.output
+    assert "texmf-dist/tex/generic/kastrup/binhex.tex" in r.output
     r = cli("search", "^lat.*dev$", "-e", "--local", str(FIXTURE))
-    assert "latex-amsmath-dev" in r.output and "kastrup" not in r.output
+    assert "latex-amsmath-dev" in r.output
+    assert "kastrup" not in r.output
     r = cli("search", "latexmk", "--exact", "--local", str(FIXTURE))
-    assert "latexmk.windows" not in r.output and "latexmk" in r.output
+    assert "latexmk.windows" not in r.output
+    assert "latexmk" in r.output
     r = cli("search", "latex", "-n", "1", "--local", str(FIXTURE))
     assert "Showing 1 of" in r.output
     r = cli("search", "zzzzqq", "--local", str(FIXTURE))
     assert r.exit_code == 1
     r = cli("search", "(", "-e", "--local", str(FIXTURE))
-    assert r.exit_code == 1 and "regular expression" in r.output
+    assert r.exit_code == 1
+    assert "regular expression" in r.output
 
 
 def test_cli_info() -> None:
@@ -672,7 +704,8 @@ def test_cli_info() -> None:
     assert "RELOC" not in r.output
     # CTAN key lookup
     r = cli("info", "binhex", "--local", str(FIXTURE), "--no-files")
-    assert r.exit_code == 0 and "r15878" in r.output
+    assert r.exit_code == 0
+    assert "r15878" in r.output
     assert "binhex.tex" not in r.output
 
 
@@ -700,9 +733,11 @@ def test_cli_info_json() -> None:
 def test_cli_info_unknown_suggests() -> None:
     r = cli("info", "kastrp", "--local", str(FIXTURE))
     assert r.exit_code == 1
-    assert "Did you mean" in r.output and "kastrup" in r.output
+    assert "Did you mean" in r.output
+    assert "kastrup" in r.output
     r = cli("info", "qqqqqqqq", "--local", str(FIXTURE))
-    assert r.exit_code == 1 and "qqqqqqqq" in r.output
+    assert r.exit_code == 1
+    assert "qqqqqqqq" in r.output
 
 
 def test_cli_group_without_subcommand_runs_stats(
@@ -714,8 +749,10 @@ def test_cli_group_without_subcommand_runs_stats(
     r = cli()
     assert r.exit_code == 0, r.output
     flat = r.output.replace("\n", "")
-    assert FINAL in flat and ".sqlite" in flat
-    assert "Schema version" in r.output and "Index size" in r.output
+    assert FINAL in flat
+    assert ".sqlite" in flat
+    assert "Schema version" in r.output
+    assert "Index size" in r.output
 
 
 def test_cli_offline_without_cache(
@@ -724,13 +761,15 @@ def test_cli_offline_without_cache(
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
 
-    def boom(req, timeout):  # type: ignore[no-untyped-def]
-        raise urllib.error.URLError("no network")
+    def boom(req, timeout) -> Never:  # type: ignore[no-untyped-def]
+        msg = "no network"
+        raise urllib.error.URLError(msg)
 
     monkeypatch.setattr(tl, "urlopen", boom)
     r = cli("stats", "-r", REPO)
     assert r.exit_code == 1
-    assert "Error" in r.output and "offline" in r.output
+    assert "Error" in r.output
+    assert "offline" in r.output
 
 
 def test_cli_repository_from_project(
@@ -763,7 +802,8 @@ def test_settings_are_separate_from_depends(db: tl.Tlpdb) -> None:
     assert "release/2026" in cfg.settings
     assert db.packages["latexmk"].depends == ["latexmk.ARCH"]
     assert db.packages["latexmk"].settings == []
-    assert cfg.to_dict()["depends"] == [] and cfg.to_dict()["settings"] == cfg.settings
+    assert cfg.to_dict()["depends"] == []
+    assert cfg.to_dict()["settings"] == cfg.settings
 
 
 def test_settings_in_sqlite_index(db: tl.Tlpdb) -> None:
@@ -795,7 +835,8 @@ def test_old_schema_index_is_rebuilt_offline(
     _no_network(monkeypatch)
     db = tl.load(REPO)
     assert db.schema_version == tl.SCHEMA_VERSION == 2
-    assert db.from_cache and not db.offline
+    assert db.from_cache
+    assert not db.offline
     assert db.packages["00texlive.config"].settings
     assert db.packages["00texlive.config"].depends == []
 
@@ -803,14 +844,17 @@ def test_old_schema_index_is_rebuilt_offline(
 def test_cli_info_shows_settings_section() -> None:
     r = cli("info", "00texlive.config", "--local", str(FIXTURE))
     assert r.exit_code == 0, r.output
-    assert "Settings" in r.output and "release/2026" in r.output
+    assert "Settings" in r.output
+    assert "release/2026" in r.output
     assert "Depends" not in r.output
     r = cli("info", "latexmk", "--local", str(FIXTURE))
-    assert "Depends" in r.output and "Settings" not in r.output
+    assert "Depends" in r.output
+    assert "Settings" not in r.output
     data = json.loads(
         cli("info", "00texlive.config", "--json", "--local", str(FIXTURE)).output
     )
-    assert data["depends"] == [] and "frozen/0" in data["settings"]
+    assert data["depends"] == []
+    assert "frozen/0" in data["settings"]
 
 
 def test_real_index_pseudo_records_stay_out_of_edges() -> None:
@@ -821,7 +865,9 @@ def test_real_index_pseudo_records_stay_out_of_edges() -> None:
         pytest.skip("no cached TeX Live index")
     real = tl.load(repo)
     cfg = real.get("00texlive.config")
-    assert cfg is not None and cfg.depends == [] and cfg.settings
+    assert cfg is not None
+    assert cfg.depends == []
+    assert cfg.settings
     for name in real.names():
         pkg = real.get(name)
         assert pkg is not None
@@ -836,7 +882,9 @@ def test_refresh_reports_whether_the_download_differs(
     import lzma
 
     def body(rev: str) -> bytes:
-        return lzma.compress(f"name 00texlive.config\ncategory TLCore\nrevision {rev}\n".encode())
+        return lzma.compress(
+            f"name 00texlive.config\ncategory TLCore\nrevision {rev}\n".encode()
+        )
 
     current = {"b": body("1")}
 
@@ -879,21 +927,29 @@ def test_older_download_from_a_stale_mirror_is_not_kept(
         return Resp(served[min(len(calls), len(served)) - 1])
 
     monkeypatch.setattr(tl, "urlopen", fake)
-    assert tl.load_remote("https://r.example/tlnet", refresh=True).revisions()["pkg"] == 200
+    assert (
+        tl.load_remote("https://r.example/tlnet", refresh=True).revisions()["pkg"]
+        == 200
+    )
     # every mirror is behind: keep the cached index
     served[:] = [body("150")]
     calls.clear()
     db = tl.load_remote("https://r.example/tlnet", refresh=True)
-    assert db.stale_mirror and db.revisions()["pkg"] == 200
+    assert db.stale_mirror
+    assert db.revisions()["pkg"] == 200
     assert len(calls) == 1 + tl.STALE_RETRIES
     # the second mirror is current: use it
     served[:] = [body("150"), body("210")]
     calls.clear()
     db = tl.load_remote("https://r.example/tlnet", refresh=True)
-    assert not db.stale_mirror and db.revisions()["pkg"] == 210 and len(calls) == 2
+    assert not db.stale_mirror
+    assert db.revisions()["pkg"] == 210
+    assert len(calls) == 2
 
 
-def test_remote_download_reports_progress(cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_remote_download_reports_progress(
+    cache: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import io
     import lzma
 
@@ -907,6 +963,11 @@ def test_remote_download_reports_progress(cache: Path, monkeypatch: pytest.Monke
 
     monkeypatch.setattr(tl, "urlopen", lambda req, timeout=None: Resp(data))
     seen: list[tuple[int, int]] = []
-    tl.load_remote("https://r.example/tlnet", refresh=True, progress=lambda d, t: seen.append((d, t)))
-    assert seen[0] == (0, len(data)) and seen[-1] == (len(data), len(data))
+    tl.load_remote(
+        "https://r.example/tlnet",
+        refresh=True,
+        progress=lambda d, t: seen.append((d, t)),
+    )
+    assert seen[0] == (0, len(data))
+    assert seen[-1] == (len(data), len(data))
     assert [d for d, _ in seen] == sorted(d for d, _ in seen)

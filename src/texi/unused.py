@@ -1,4 +1,4 @@
-"""Which packages in texproject.toml does the project not use?
+r"""Which packages in texproject.toml does the project not use?
 
 Evidence that a package is used:
 
@@ -62,8 +62,10 @@ def log_paths(text: str, roots: list[str]) -> set[str]:
     """Absolute paths under any of ``roots`` that a TeX ``.log`` mentions."""
     found: set[str] = set()
     for root in roots:
-        for m in re.finditer(re.escape(root.rstrip("/")) + "/" + _LOG_PATH, text):
-            found.add(m.group(0).rstrip(".,;:"))
+        found.update(
+            m.group(0).rstrip(".,;:")
+            for m in re.finditer(re.escape(root.rstrip("/")) + "/" + _LOG_PATH, text)
+        )
     return found
 
 
@@ -112,7 +114,7 @@ def analyze(
             rep.not_installed.append(name)
         elif name in used:
             rep.used.append(name)
-        elif categories.get(name) in ("Collection", "Scheme"):
+        elif categories.get(name) in {"Collection", "Scheme"}:
             members = sorted((deptree.closure(g, [name]) - {name}) & used)
             if members:
                 rep.via_collection[name] = members[0]

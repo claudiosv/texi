@@ -62,9 +62,14 @@ from pathlib import Path
 from texi import lsr, texenv
 
 #: Programs that a standalone tree must supply itself.
-TREE_TOOLS = frozenset(
-    {"updmap", "updmap-sys", "fmtutil", "fmtutil-sys", "kpsewhich", "texlua"}
-)
+TREE_TOOLS = frozenset({
+    "updmap",
+    "updmap-sys",
+    "fmtutil",
+    "fmtutil-sys",
+    "kpsewhich",
+    "texlua",
+})
 
 #: ``--no-error-if-no-engine`` value (``TLConfig::PartialEngineSupport``).
 PARTIAL_ENGINES = "luametatex,luajithbtex,luajittex,mfluajit,xetex"
@@ -121,7 +126,8 @@ def _words(line: str, what: str) -> list[str]:
     try:
         return shlex.split(line)
     except ValueError as e:
-        raise ExecuteError(f"cannot parse {what} line {line!r}: {e}") from e
+        msg = f"cannot parse {what} line {line!r}: {e}"
+        raise ExecuteError(msg) from e
 
 
 def parse_add_format(line: str) -> FormatDef:
@@ -136,12 +142,15 @@ def parse_add_format(line: str) -> FormatDef:
     for word in _words(line, "AddFormat"):
         m = re.fullmatch(r"(name|engine|mode|patterns|options|fmttriggers)=(.*)", word)
         if not m:
-            raise ExecuteError(f"Unknown format directive {word}")
+            msg = f"Unknown format directive {word}"
+            raise ExecuteError(msg)
         values[m[1]] = m[2]
     if not values.get("name"):
-        raise ExecuteError("AddFormat line needs name=something")
+        msg = "AddFormat line needs name=something"
+        raise ExecuteError(msg)
     if not values.get("engine"):
-        raise ExecuteError("AddFormat line needs engine=something")
+        msg = "AddFormat line needs engine=something"
+        raise ExecuteError(msg)
     return FormatDef(
         values["name"],
         values["engine"],
@@ -164,25 +173,34 @@ def parse_add_hyphen(line: str) -> HyphenDef:
     values: dict[str, str | None] = {}
     for word in _words(line, "AddHyphen"):
         key, _, rest = word.partition("=")
-        if (
-            key
-            not in (
-                "name lefthyphenmin righthyphenmin file file_patterns file_exceptions "
-                "luaspecial databases synonyms comment"
-            ).split()
-        ):
-            raise ExecuteError(f"Unknown AddHyphen directive {key}: {line}")
+        if key not in {
+            "name",
+            "lefthyphenmin",
+            "righthyphenmin",
+            "file",
+            "file_patterns",
+            "file_exceptions",
+            "luaspecial",
+            "databases",
+            "synonyms",
+            "comment",
+        }:
+            msg = f"Unknown AddHyphen directive {key}: {line}"
+            raise ExecuteError(msg)
         values[key] = rest if "=" in word else None
     for key in ("name", "file", "luaspecial", "databases", "synonyms"):
         if key in values and not values[key]:
-            raise ExecuteError(f"AddHyphen line needs {key}=something: {line}")
+            msg = f"AddHyphen line needs {key}=something: {line}"
+            raise ExecuteError(msg)
     if not values.get("name"):
-        raise ExecuteError(f"AddHyphen is missing name setting: {line}")
+        msg = f"AddHyphen is missing name setting: {line}"
+        raise ExecuteError(msg)
     for key in ("lefthyphenmin", "righthyphenmin"):
         if not re.fullmatch(r"[0-9]", values.get(key) or ""):
-            raise ExecuteError(
+            msg = (
                 f"AddHyphen has missing or bad {key} ({values.get(key) or ''}): {line}"
             )
+            raise ExecuteError(msg)
     synonyms = values.get("synonyms") or ""
     databases = values.get("databases") or ""
     return HyphenDef(
@@ -235,9 +253,11 @@ def format_defs(executes: Executes) -> list[tuple[str, FormatDef]]:
     """``(package, format)`` of every ``AddFormat`` line, packages in name order."""
     out: list[tuple[str, FormatDef]] = []
     for pkg in sorted(executes):
-        for e in executes[pkg]:
-            if _kind(e) == "AddFormat":
-                out.append((pkg, parse_add_format(e.split(None, 1)[1])))
+        out.extend(
+            (pkg, parse_add_format(e.split(None, 1)[1]))
+            for e in executes[pkg]
+            if _kind(e) == "AddFormat"
+        )
     return out
 
 
@@ -297,7 +317,7 @@ def language_dat_lines(executes: Executes, disabled: Iterable[str] = ()) -> list
 
 
 def language_def_lines(executes: Executes, disabled: Iterable[str] = ()) -> list[str]:
-    """``language.def`` lines: ``\\addlanguage`` for the name and each synonym."""
+    r"""``language.def`` lines: ``\\addlanguage`` for the name and each synonym."""
 
     def render(h: HyphenDef) -> list[str]:
         return [
@@ -497,7 +517,7 @@ def _write_atomic(path: Path, text: str) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
         Path(tmp).chmod(0o644)
-        os.replace(tmp, path)
+        Path(tmp).replace(path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
@@ -789,7 +809,7 @@ def _build_formats(ctx: _Run, select: list[str]) -> None:
             ctx.warn(f"{tool} not found: formats not built")
             return
         failed = []
-        for line in status.read_text(errors="replace").splitlines():
+        for line in status.read_text(encoding="utf-8", errors="replace").splitlines():
             parts = line.split()
             if len(parts) >= 3 and parts[0] == "FAILURE":
                 failed.append(f"{parts[1]}/{parts[2]}")
@@ -893,9 +913,12 @@ def run(
         ctx.warn(p)
     if batch.empty and not batch.changed:
         return ctx.out
-    if standalone and not (
-        ctx.root / "texmf-var" / "tex" / "generic" / "config" / "language.def"
-    ).is_file():
+    if (
+        standalone
+        and not (
+            ctx.root / "texmf-var" / "tex" / "generic" / "config" / "language.def"
+        ).is_file()
+    ):
         # hyphen-base ships a language.def that lists every language of TeX Live;
         # until ours shadows it, formats fail on the patterns that are not installed
         batch.hyphens = True

@@ -109,9 +109,20 @@ Today a standalone tree gets only `PATH`, and a usertree gets `TEXMFHOME`/`TEXMF
 
 ```python
 _SCRUBBED = (
-    "TEXMFAUXTREES", "TEXMFDOTDIR", "TEXINPUTS", "BIBINPUTS", "BSTINPUTS",
-    "TFMFONTS", "TEXFONTS", "OPENTYPEFONTS", "TTFONTS", "T1FONTS", "VFFONTS",
-    "TEXFORMATS", "TEXPOOL", "TEXPSHEADERS",
+    "TEXMFAUXTREES",
+    "TEXMFDOTDIR",
+    "TEXINPUTS",
+    "BIBINPUTS",
+    "BSTINPUTS",
+    "TFMFONTS",
+    "TEXFONTS",
+    "OPENTYPEFONTS",
+    "TTFONTS",
+    "T1FONTS",
+    "VFFONTS",
+    "TEXFORMATS",
+    "TEXPOOL",
+    "TEXPSHEADERS",
 )
 
 

@@ -138,7 +138,8 @@ catalogue onlycoll-key
 
 
 def _no_fallback(*a: object, **k: object) -> None:
-    raise AssertionError("fallback pipeline used")
+    msg = "fallback pipeline used"
+    raise AssertionError(msg)
 
 
 @pytest.fixture
@@ -176,9 +177,7 @@ def test_index_ignores_doc_files(
     # acmart-doc.sty is listed under docfiles only: not a provider, so the index
     # has no candidate and the pipeline is asked
     calls: list[str] = []
-    monkeypatch.setattr(
-        cli, "find_texlive_for_ctan", lambda n: calls.append(n) or []
-    )
+    monkeypatch.setattr(cli, "find_texlive_for_ctan", lambda n: calls.append(n) or [])
     assert cli.find_bundle_for_sty("acmart-doc", Console(), {}) == []
     assert calls == ["acmart-doc"]
 
@@ -203,7 +202,8 @@ def test_index_cache_hit_skips_everything(
     index: tl.Tlpdb, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     def no_index(console: object) -> None:
-        raise AssertionError("index consulted")
+        msg = "index consulted"
+        raise AssertionError(msg)
 
     monkeypatch.setattr(cli, "_resolver_tlpdb", no_index)
     assert cli.find_bundle_for_sty("x", Console(), {"x": ["cached"]}) == ["cached"]
@@ -262,7 +262,8 @@ def test_resolver_tlpdb_loaded_once_and_failure_memoized(
 
     def broken(repo: str) -> tl.Tlpdb:
         loads.append("again")
-        raise tl.TlpdbError("offline")
+        msg = "offline"
+        raise tl.TlpdbError(msg)
 
     monkeypatch.setattr(tl, "load", broken)
     cli._reset_tlpdb_memo()
@@ -284,7 +285,7 @@ def test_tl_package_exists_uses_only_the_index(index: tl.Tlpdb) -> None:
 
 
 def test_fallback_pipeline_without_tlpdb(monkeypatch: pytest.MonkeyPatch) -> None:
-    """tlpdb unavailable: CTAN decides."""
+    """Tlpdb unavailable: CTAN decides."""
     from rich.console import Console
 
     ctan: dict[str, list[str] | None] = {}

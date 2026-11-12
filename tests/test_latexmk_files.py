@@ -36,19 +36,24 @@ def test_fixture_inventory():
 def test_every_fixture_parses(name):
     fls = load_fls(FIX / f"{name}.fls")
     fdb = load_fdb(FIX / f"{name}.fdb_latexmk")
-    assert fls.pwd and fls.pwd.startswith("/")
+    assert fls.pwd
+    assert fls.pwd.startswith("/")
     assert "main.tex" in fls.inputs
     assert len(fls.inputs) == len(set(fls.resolved_inputs()))
     assert fdb.version == 4
     assert fdb.rules
     for r in fdb.rules:
-        assert r.name and r.run_time is not None and r.source and r.dest
+        assert r.name
+        assert r.run_time is not None
+        assert r.source
+        assert r.dest
         assert r.base == "main"
         assert r.deps
         for d in r.deps:
             assert d.path
             if not d.generated:
-                assert d.mtime is not None and d.size is not None
+                assert d.mtime is not None
+                assert d.size is not None
             else:
                 assert d.mtime is None
     assert "main.fls" in fdb.generated_files() or name == "biber_handwritten"
@@ -85,7 +90,7 @@ def test_bibtex_fdb():
     assert bib.run_time == pytest.approx(1794431786.91482)
     assert bib.check_time == pytest.approx(1794431787.01161)
     assert bib.status == 0
-    assert [d.path for d in bib.inputs][0] == "./refs.bib"
+    assert next(d.path for d in bib.inputs) == "./refs.bib"
     assert bib.inputs[-1].from_rule == "pdflatex"
     assert [d.path for d in bib.generated] == ["main.bbl", "main.blg"]
     assert bib.rewritten == []
@@ -93,8 +98,10 @@ def test_bibtex_fdb():
     tex = fdb.rule("pdflatex")
     assert tex is not None
     bbl = next(d for d in tex.deps if d.path == "main.bbl")
-    assert bbl.from_rule == "bibtex main" and not bbl.generated
-    assert bbl.size == 106 and bbl.md5 == "09902efc2bc78d81b51f008e2a7231cf"
+    assert bbl.from_rule == "bibtex main"
+    assert not bbl.generated
+    assert bbl.size == 106
+    assert bbl.md5 == "09902efc2bc78d81b51f008e2a7231cf"
     assert "main.pdf" in fdb.generated_files()
     assert "main.pdf" not in [d.path for d in fdb.all_deps()]
     assert "main.pdf" in [d.path for d in fdb.all_deps(include_generated=True)]
@@ -105,7 +112,9 @@ def test_bibtex_fdb():
 def test_makeindex_rule_name_with_space():
     fdb = load_fdb(FIX / "makeindex.fdb_latexmk")
     r = fdb.rule("makeindex main.idx")
-    assert r is not None and r.source == "main.idx" and r.dest == "main.ind"
+    assert r is not None
+    assert r.source == "main.idx"
+    assert r.dest == "main.ind"
     assert [d.path for d in r.generated] == ["main.ilg", "main.ind"]
 
 
@@ -128,7 +137,8 @@ def test_xelatex_two_rules():
 def test_space_in_path():
     fls = load_fls(FIX / "space_in_path.fls")
     assert fls.pwd == "/tmp/proj/sp ace"
-    assert "./my sec.tex" in fls.inputs and "my sec.tex" not in fls.inputs
+    assert "./my sec.tex" in fls.inputs
+    assert "my sec.tex" not in fls.inputs
     assert fls.project_inputs() == [
         "/tmp/proj/sp ace/main.tex",
         "/tmp/proj/sp ace/my sec.tex",
@@ -160,7 +170,8 @@ def test_handwritten_biber():
     assert [r.name for r in fdb.rules] == ["biber main", "lualatex"]
     lua = fdb.rule("lualatex")
     assert lua is not None
-    assert lua.dest == "build/main.pdf" and lua.status == 1
+    assert lua.dest == "build/main.pdf"
+    assert lua.status == 1
     assert lua.rewritten == ["main.aux"]
     assert [d.path for d in lua.generated] == [
         "build/main.pdf",
@@ -193,14 +204,18 @@ def test_from_build(tmp_path):
     for ext in ("fls", "fdb_latexmk"):
         (tmp_path / f"job.{ext}").write_bytes((FIX / f"bibtex.{ext}").read_bytes())
     pf = ProjectFiles.from_build(tmp_path, "job")
-    assert pf.fls and pf.fdb and pf.pwd == "/tmp/proj/bibtex"
+    assert pf.fls
+    assert pf.fdb
+    assert pf.pwd == "/tmp/proj/bibtex"
     assert [p.name for p in pf.source_files()] == [
         "main.tex",
         "refs.bib",
     ]  # .bbl is generated
     only = ProjectFiles.from_build(tmp_path, "nothing")
-    assert only.fls is None and only.fdb is None
-    assert only.source_files() == [] and only.external_files() == []
+    assert only.fls is None
+    assert only.fdb is None
+    assert only.source_files() == []
+    assert only.external_files() == []
     (tmp_path / "job.fdb_latexmk").unlink()
     assert ProjectFiles.from_build(tmp_path, "job").fdb is None
 
@@ -223,9 +238,9 @@ def test_changed_since():
 
 
 def test_changed_by_md5_and_size():
-    mk = lambda size, md5: parse_fdb(
-        f'["x"] 1 "s" "d" "b" 1 0\n  "f" 5 {size} {md5} ""\n'
-    )
+    def mk(size, md5):
+        return parse_fdb(f'["x"] 1 "s" "d" "b" 1 0\n  "f" 5 {size} {md5} ""\n')
+
     assert mk(1, "aa").changed_since(mk(1, "aa")) == []
     assert len(mk(1, "aa").changed_since(mk(2, "aa"))) == 1
     assert len(mk(1, "aa").changed_since(mk(1, "bb"))) == 1
@@ -257,9 +272,12 @@ def test_fdb_tolerance():
         "weird.tex",
         "x y.aux",
     ]
-    assert r.deps[0].md5 is None and r.deps[0].size == 4
-    assert r.deps[1].size is None and r.deps[1].mtime == 3
-    assert r.deps[2].mtime is None and r.deps[2].size is None
+    assert r.deps[0].md5 is None
+    assert r.deps[0].size == 4
+    assert r.deps[1].size is None
+    assert r.deps[1].mtime == 3
+    assert r.deps[2].mtime is None
+    assert r.deps[2].size is None
     assert r.deps[3].generated
 
 
@@ -269,12 +287,14 @@ def test_versions(version):
         f'# Fdb version {version}\n["pdflatex"] 1 "a" "b" "c" 1 0\n  "f" 1 1 0 ""\n'
     )
     assert fdb.version == (int(version) if version.isdigit() else None)
-    assert len(fdb.rules) == 1 and len(fdb.rules[0].deps) == 1
+    assert len(fdb.rules) == 1
+    assert len(fdb.rules[0].deps) == 1
 
 
 def test_unknown_or_missing_header_still_parses():
     fdb = parse_fdb('["pdflatex"] 1 "a" "b" "c" 1 0\n')
-    assert fdb.version is None and len(fdb.rules) == 1
+    assert fdb.version is None
+    assert len(fdb.rules) == 1
 
 
 def test_empty_and_garbage():
@@ -339,7 +359,8 @@ def test_fls_details():
 
 def test_fls_without_pwd():
     fls = parse_fls("INPUT main.tex\nOUTPUT main.pdf\n")
-    assert fls.pwd is None and fls.resolved_inputs() == ["main.tex"]
+    assert fls.pwd is None
+    assert fls.resolved_inputs() == ["main.tex"]
     assert fls.project_inputs() == []
 
 

@@ -27,6 +27,7 @@ by :mod:`texi.tlactions`; binaries of the tree's architecture are cloned into
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import errno
 import hashlib
@@ -40,7 +41,7 @@ import textwrap
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -200,10 +201,12 @@ def _download(
                         cl.close()
     except (httpx.HTTPError, OSError) as e:
         dest.unlink(missing_ok=True)
-        raise ArchiveError(f"download of {url} failed: {e}") from e
+        msg = f"download of {url} failed: {e}"
+        raise ArchiveError(msg) from e
     if verify and digest.hexdigest() != expected.lower():
         dest.unlink(missing_ok=True)
-        raise ArchiveError(f"sha512 mismatch for {url}")
+        msg = f"sha512 mismatch for {url}"
+        raise ArchiveError(msg)
     return digest.hexdigest()
 
 
@@ -281,7 +284,8 @@ def fetch(
     """
     checksum = container_checksum(pkg)
     if not checksum:
-        raise ArchiveError("no container checksum in the tlpdb")
+        msg = "no container checksum in the tlpdb"
+        raise ArchiveError(msg)
     ident = archive_id(pkg.name, pkg.revision, checksum)
     store = store_dir()
     final = store / ident
@@ -296,6 +300,7 @@ def fetch(
     staging = Path(tempfile.mkdtemp(prefix=".tmp-", dir=store))
     try:
         size = int(pkg.first("containersize") or 0)
+
         def url_for(attempt: int) -> str:
             base = mirror if mirror and attempt == 0 else repository
             return f"{base.rstrip('/')}/archive/{pkg.name}.tar.xz"
@@ -322,9 +327,8 @@ def fetch(
                         if "sha512 mismatch" in str(e)
                         else ""
                     )
-                    raise ArchiveError(
-                        f"{e} (gave up after {attempt + 1} attempts{hint})"
-                    ) from e
+                    msg = f"{e} (gave up after {attempt + 1} attempts{hint})"
+                    raise ArchiveError(msg) from e
                 delay = RETRY_DELAYS[attempt]
                 if notice:
                     notice(
@@ -350,7 +354,8 @@ def fetch(
             with tarfile.open(part) as tf:
                 tf.extractall(target, filter="data")
         except (tarfile.TarError, OSError, EOFError) as e:
-            raise ArchiveError(f"cannot extract {pkg.name}: {e}") from e
+            msg = f"cannot extract {pkg.name}: {e}"
+            raise ArchiveError(msg) from e
         files = sorted(
             p.relative_to(target).as_posix()
             for p in target.rglob("*")
@@ -365,7 +370,7 @@ def fetch(
                     "repository": repository,
                     "checksum": checksum,
                     "files": files,
-                    "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                    "created": datetime.now(UTC).isoformat(timespec="seconds"),
                 },
                 indent=2,
             )
@@ -373,7 +378,7 @@ def fetch(
             encoding="utf-8",
         )
         try:
-            os.replace(staging, final)  # atomic; fails if someone else was first
+            Path(staging).replace(final)  # atomic; fails if someone else was first
         except OSError:
             if (hit := _read_entry(final, pkg.name)) is not None:
                 return hit, False
@@ -403,7 +408,7 @@ def _clone_native(src: str, dst: str) -> None:
     elif sys.platform.startswith("linux"):
         import fcntl
 
-        with open(src, "rb") as s, open(dst, "wb") as d:
+        with Path(src).open("rb") as s, Path(dst).open("wb") as d:
             fcntl.ioctl(d.fileno(), _FICLONE, s.fileno())
         shutil.copymode(src, dst)
     else:
@@ -424,8 +429,8 @@ def clone_file(
     if dst.is_symlink() or dst.exists():
         dst.unlink()
     if src.is_symlink():
-        target = os.readlink(src)
-        os.symlink(relink(target) if relink else target, dst)
+        target = Path(src).readlink()
+        Path(dst).symlink_to(relink(target) if relink else target)
         return False
     if not _native_disabled:
         try:
@@ -444,7 +449,7 @@ def clone_file(
 
 def member_path(path: str) -> str:
     """Path of a tlpdb file inside its container (``RELOC/`` is the container root)."""
-    return path[len("RELOC/") :] if path.startswith("RELOC/") else path
+    return path.removeprefix("RELOC/")
 
 
 def target_path(path: str, standalone: bool) -> str:
@@ -463,7 +468,8 @@ def _checked(env_dir: Path, rel: str) -> Path:
     """``env_dir / rel`` if it stays inside ``env_dir``."""
     p = Path(rel)
     if p.is_absolute() or ".." in p.parts or not rel:
-        raise ArchiveError(f"unsafe path in package: {rel!r}")
+        msg = f"unsafe path in package: {rel!r}"
+        raise ArchiveError(msg)
     return env_dir / p
 
 
@@ -547,7 +553,7 @@ def _write_atomic(path: Path, text: str) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
         Path(tmp).chmod(0o644)
-        os.replace(tmp, path)
+        Path(tmp).replace(path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
@@ -616,16 +622,16 @@ class Tree:
             kind, _, sec_arch = sec.partition(":")
             if kind == "binfiles" and files:
                 if self.arch is None:
-                    raise ArchiveError(
-                        f"{pkg.name} ships binaries but the architecture is unknown"
-                    )
+                    msg = f"{pkg.name} ships binaries but the architecture is unknown"
+                    raise ArchiveError(msg)
                 if sec_arch == self.arch:
                     listed += [(f.path, f.path) for f in files]
         for member, rel in listed:
             src = _checked(entry.package_dir, member_path(member))
             dst = _checked(self.env_dir, rel)
             if not (src.is_symlink() or src.exists()):
-                raise ArchiveError(f"{member} is missing from the {pkg.name} archive")
+                msg = f"{member} is missing from the {pkg.name} archive"
+                raise ArchiveError(msg)
             pairs.append((src, dst))
         self.uninstall(pkg.name)
         for src, dst in pairs:
@@ -899,10 +905,10 @@ def plan(
             root not in res.missing
             and (why := res.skipped.get(root))
             and why
-            not in (
+            not in {
                 resolver.REASON_SYSTEM,
                 resolver.REASON_METADATA,
-            )
+            }
         ):
             out.skipped[root] = why
     for n in res.order:
@@ -1117,10 +1123,8 @@ def _dir_size(path: Path) -> int:
     total = 0
     for root, _dirs, files in os.walk(path):
         for f in files:
-            try:
+            with contextlib.suppress(OSError):
                 total += os.lstat(os.path.join(root, f)).st_size
-            except OSError:
-                pass
     return total
 
 

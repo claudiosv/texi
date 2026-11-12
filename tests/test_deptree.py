@@ -74,14 +74,17 @@ def names(nodes: list[deptree.Node]) -> list[str]:
     return [n.name for n in nodes]
 
 
-def test_graph_hides_binary_variants_arch_placeholders_and_uninstalled(env: Path) -> None:
+def test_graph_hides_binary_variants_arch_placeholders_and_uninstalled(
+    env: Path,
+) -> None:
     g = deptree.read(env, "universal-darwin")
     assert "app.universal-darwin" not in g.revisions
     assert "00texlive.installation" not in g.revisions
     assert g.deps["app"] == ["lib", "tool"]
     assert g.deps["tool"] == ["base"]  # ghost is not installed
     assert g.dependents["base"] == ["lib", "tool", "unrelated"]
-    assert "app" in g.roots() and "core" not in g.roots()
+    assert "app" in g.roots()
+    assert "core" not in g.roots()
 
 
 def test_tree_dependencies_depth_and_repeats(env: Path) -> None:
@@ -93,9 +96,11 @@ def test_tree_dependencies_depth_and_repeats(env: Path) -> None:
     assert app.children[1].children[0].seen  # base already shown under lib
     (cut,) = deptree.build(g, ["app"], depth=1)
     assert names(cut.children) == ["lib", "tool"]
-    assert cut.children[0].cut and cut.children[0].children == []
+    assert cut.children[0].cut
+    assert cut.children[0].children == []
     (flat,) = deptree.build(g, ["app"], depth=0)
-    assert flat.children == [] and flat.cut
+    assert flat.children == []
+    assert flat.cut
 
 
 def test_invert_lists_dependents(env: Path) -> None:
@@ -108,7 +113,8 @@ def test_invert_lists_dependents(env: Path) -> None:
 def test_cycles_terminate(env: Path) -> None:
     g = deptree.read(env, "universal-darwin")
     (loop,) = deptree.build(g, ["loop"])
-    assert names(loop.children) == ["loop2"] and loop.children[0].children == []
+    assert names(loop.children) == ["loop2"]
+    assert loop.children[0].children == []
 
 
 def test_contract_links_listed_packages_through_unlisted_ones(env: Path) -> None:
@@ -122,9 +128,12 @@ def test_contract_links_listed_packages_through_unlisted_ones(env: Path) -> None
 def test_tree_invert_defaults_to_project_packages(project: Path) -> None:
     r = runner.invoke(cli.app, ["tree", "-p", "core", "--invert"])
     assert "in texproject.toml" in r.output
-    assert "lib r2" in r.output and "tool" not in r.output and "unrelated" not in r.output
+    assert "lib r2" in r.output
+    assert "tool" not in r.output
+    assert "unrelated" not in r.output
     r = runner.invoke(cli.app, ["tree", "-p", "core", "--invert", "--no-project-only"])
-    assert "tool r5" in r.output and "unrelated r4" in r.output
+    assert "tool r5" in r.output
+    assert "unrelated r4" in r.output
 
 
 def test_closure_for_explicit(env: Path) -> None:
@@ -146,26 +155,33 @@ def project(env: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_tree_command_explicit_and_package(project: Path) -> None:
     r = runner.invoke(cli.app, ["tree", "--explicit"])
     assert r.exit_code == 0, r.output
-    assert "lib" in r.output and "base" in r.output
-    assert "unrelated" not in r.output and "app r3" not in r.output
+    assert "lib" in r.output
+    assert "base" in r.output
+    assert "unrelated" not in r.output
+    assert "app r3" not in r.output
     assert "missing is in texproject.toml but not installed" in r.output
 
     r = runner.invoke(cli.app, ["tree", "--package", "app", "--depth", "1"])
-    assert "app r3" in r.output and "lib r2" in r.output and "base" not in r.output
+    assert "app r3" in r.output
+    assert "lib r2" in r.output
+    assert "base" not in r.output
 
     r = runner.invoke(cli.app, ["tree", "-p", "base", "--invert", "--no-project-only"])
-    assert "packages that depend on base" in r.output and "app r3" in r.output
+    assert "packages that depend on base" in r.output
+    assert "app r3" in r.output
 
 
 def test_tree_command_errors(project: Path) -> None:
     assert runner.invoke(cli.app, ["tree", "--invert"]).exit_code == 1
     r = runner.invoke(cli.app, ["tree", "-p", "nope"])
-    assert r.exit_code == 1 and "not installed" in r.output
+    assert r.exit_code == 1
+    assert "not installed" in r.output
 
 
 def test_build_tree_is_the_old_tree_command() -> None:
     names = [c.name or c.callback.__name__ for c in cli.app.registered_commands]
-    assert "build-tree" in names and "tree" in names
+    assert "build-tree" in names
+    assert "tree" in names
 
 
 def test_list_command_is_plain_and_filters(project: Path) -> None:

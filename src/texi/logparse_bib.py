@@ -122,7 +122,9 @@ def explain_syntax(d: Diagnostic, source_lines: list[str]) -> str | None:
             f"so the value opened at line {start} may be missing its closing brace"
         )
     if m:
-        return f"{head}: check that the braces or quotes opened at line {start} are closed"
+        return (
+            f"{head}: check that the braces or quotes opened at line {start} are closed"
+        )
     return None
 
 

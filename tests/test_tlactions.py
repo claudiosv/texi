@@ -26,20 +26,26 @@ PKGS: dict[str, tuple[dict, str, list[str]]] = {
     "trig": ({"tex/latex/trig/trig.sty": "% trig\n"}, "", []),
     "fmtpkg": (
         {"tex/latex/fmtpkg/my.ini": "% ini\n"},
-        'execute AddFormat name=myfmt engine=pdftex patterns=language.def options="*my.ini" fmttriggers=trig,hyphen-xx\n'
-        "execute AddFormat name=off engine=pdftex mode=disabled\n",
+        (
+            'execute AddFormat name=myfmt engine=pdftex patterns=language.def options="*my.ini" fmttriggers=trig,hyphen-xx\n'
+            "execute AddFormat name=off engine=pdftex mode=disabled\n"
+        ),
         [],
     ),
     "hyphen-xx": (
         {"tex/generic/hyph-utf8/loadhyph/loadhyph-xx.tex": "% xx\n"},
-        "execute AddHyphen \tname=xx \tlefthyphenmin=2 \trighthyphenmin=3 \tfile=loadhyph-xx.tex "
-        "\tfile_patterns=hyph-xx.pat.txt \tfile_exceptions=hyph-xx.hyp.txt \tsynonyms=xxa,xxb\n",
+        (
+            "execute AddHyphen \tname=xx \tlefthyphenmin=2 \trighthyphenmin=3 \tfile=loadhyph-xx.tex "
+            "\tfile_patterns=hyph-xx.pat.txt \tfile_exceptions=hyph-xx.hyp.txt \tsynonyms=xxa,xxb\n"
+        ),
         [],
     ),
     "hyphen-yy": (
         {"tex/generic/hyph-utf8/loadhyph/loadhyph-yy.tex": "% yy\n"},
-        "execute AddHyphen \tname=yy \tlefthyphenmin=1 \trighthyphenmin=1 \tfile=loadhyph-yy.tex "
-        '\tfile_patterns=hyph-yy.pat.txt \tfile_exceptions= \tluaspecial="disabled:no patterns"\n',
+        (
+            "execute AddHyphen \tname=yy \tlefthyphenmin=1 \trighthyphenmin=1 \tfile=loadhyph-yy.tex "
+            '\tfile_patterns=hyph-yy.pat.txt \tfile_exceptions= \tluaspecial="disabled:no patterns"\n'
+        ),
         [],
     ),
     "tool": (
@@ -50,8 +56,8 @@ PKGS: dict[str, tuple[dict, str, list[str]]] = {
 }
 BIN = {
     f"tool.{ARCH}": {
-        "bin/%s/tool" % ARCH: ("link", "../../texmf-dist/scripts/tool/tool.pl"),
-        "bin/%s/helper" % ARCH: SH,
+        f"bin/{ARCH}/tool": ("link", "../../texmf-dist/scripts/tool/tool.pl"),
+        f"bin/{ARCH}/helper": SH,
     },
     "tool.windows": {"bin/windows/tool.exe": "MZ"},
 }
@@ -194,7 +200,9 @@ def test_parse_add_hyphen_validates() -> None:
     h = tlactions.parse_add_hyphen(
         "name=a lefthyphenmin=2 righthyphenmin=3 file=f.tex file_exceptions= synonyms=b,c"
     )
-    assert h.synonyms == ("b", "c") and h.exceptions == "" and h.patterns is None
+    assert h.synonyms == ("b", "c")
+    assert h.exceptions == ""
+    assert h.patterns is None
     with pytest.raises(tlactions.ExecuteError):
         tlactions.parse_add_hyphen(
             "name=a lefthyphenmin=12 righthyphenmin=3 file=f.tex"
@@ -207,14 +215,16 @@ def test_parse_add_hyphen_validates() -> None:
 def test_addmap_writes_updmap_cfg_and_runs_updmap_once(tmp_path: Path, shims) -> None:
     env = new_env(tmp_path)
     res = install(env, ["fontpkg", "trig"])
-    assert res.failed == [] and res.fallback == {}
+    assert res.failed == []
+    assert res.fallback == {}
     assert (env / "web2c" / "updmap.cfg").read_text().splitlines()[1:] == [
         "Map f.map",
         "KanjiMap k.map",
         "MixedMap m.map",
     ]
     calls = shims.calls("updmap-user")
-    assert len(calls) == 1 and shims.calls("updmap-sys") == []
+    assert len(calls) == 1
+    assert shims.calls("updmap-sys") == []
     root = env.resolve()
     assert (
         calls[0][2]
@@ -226,7 +236,8 @@ def test_addmap_writes_updmap_cfg_and_runs_updmap_once(tmp_path: Path, shims) ->
 
 def test_no_maps_no_updmap(tmp_path: Path, shims) -> None:
     install(new_env(tmp_path), ["trig"])
-    assert shims.calls("updmap-user") == [] and shims.calls("fmtutil-user") == []
+    assert shims.calls("updmap-user") == []
+    assert shims.calls("fmtutil-user") == []
 
 
 def test_updmap_failure_is_a_warning(
@@ -235,7 +246,9 @@ def test_updmap_failure_is_a_warning(
     monkeypatch.setenv("SHIM_EXIT_updmap_user", "3")
     notes: list[str] = []
     res = install(new_env(tmp_path), ["fontpkg"], notice=notes.append)
-    assert res.installed == ["fontpkg"] and res.actions and res.actions.maps_failed
+    assert res.installed == ["fontpkg"]
+    assert res.actions
+    assert res.actions.maps_failed
     assert any("updmap-user failed" in n for n in notes)
 
 
@@ -255,7 +268,8 @@ def test_addformat_writes_cnf_and_builds_by_fmt_once(tmp_path: Path, shims) -> N
     calls = shims.calls("fmtutil-user")
     assert len(calls) == 1
     args = calls[0][1]
-    assert "--byfmt myfmt" in args and "off" not in args
+    assert "--byfmt myfmt" in args
+    assert "off" not in args
     assert f"--no-error-if-no-engine={tlactions.PARTIAL_ENGINES}" in args
 
 
@@ -268,7 +282,8 @@ def test_fmttrigger_rebuilds_format_when_trigger_package_changes(
     res = install(env, ["fmtpkg", "trig"])  # trig is new; fmtpkg already present
     assert res.installed == ["trig"]
     calls = shims.calls("fmtutil-user")
-    assert len(calls) == 1 and "--byfmt myfmt" in calls[0][1]
+    assert len(calls) == 1
+    assert "--byfmt myfmt" in calls[0][1]
 
 
 def test_format_build_failure_warns_and_continues(
@@ -278,7 +293,8 @@ def test_format_build_failure_warns_and_continues(
     notes: list[str] = []
     res = install(new_env(tmp_path), ["fmtpkg", "fontpkg"], notice=notes.append)
     assert sorted(res.installed) == ["fmtpkg", "fontpkg"]
-    assert res.actions and res.actions.failed_formats
+    assert res.actions
+    assert res.actions.failed_formats
     assert any("fmtutil-user could not build" in n for n in notes)
 
 
@@ -292,7 +308,10 @@ def test_addhyphen_generates_language_files(
     env = new_env(tmp_path)
     install(env, ["hyphen-xx", "hyphen-yy", "fmtpkg"])
     gen = env / "texmf-var" / "tex" / "generic" / "config"
-    body = lambda p: (gen / p).read_text().split("\n", 1)[1]  # drop the date line
+
+    def body(p):
+        return (gen / p).read_text().split("\n", 1)[1]  # drop the date line
+
     assert (
         body("language.dat")
         == (
@@ -305,7 +324,9 @@ def test_addhyphen_generates_language_files(
     )  # order is checked below
     dat = body("language.dat").splitlines()
     assert dat[:2] == ["% head dat", "english hyphen.tex"]
-    assert "xx loadhyph-xx.tex" in dat and "=xxb" in dat and "yy loadhyph-yy.tex" in dat
+    assert "xx loadhyph-xx.tex" in dat
+    assert "=xxb" in dat
+    assert "yy loadhyph-yy.tex" in dat
     assert "ushyph loadhyph-en-us.tex" in dat  # the system's entries stay
     d = (gen / "language.def").read_text()
     assert d.startswith("% head def\n")  # no date line in language.def
@@ -342,7 +363,8 @@ def test_hyphenation_is_derived_from_all_packages_and_removal_updates(
     install(env, ["hyphen-yy"])  # a later batch: xx must stay
     gen = env / "texmf-var" / "tex" / "generic" / "config"
     dat = (gen / "language.dat").read_text()
-    assert "xx loadhyph-xx.tex" in dat and "yy loadhyph-yy.tex" in dat
+    assert "xx loadhyph-xx.tex" in dat
+    assert "yy loadhyph-yy.tex" in dat
     before = {
         n: (gen / n).read_text().split("\n", 1)[1]
         for n in ("language.dat", "language.dat.lua")
@@ -351,11 +373,9 @@ def test_hyphenation_is_derived_from_all_packages_and_removal_updates(
     assert {n: (gen / n).read_text().split("\n", 1)[1] for n in before} == before
     archive.uninstall(env, "hyphen-xx", arch=ARCH)
     dat = (gen / "language.dat").read_text()
-    assert (
-        "xx loadhyph-xx.tex" not in dat
-        and "=xxa" not in dat
-        and "yy loadhyph-yy.tex" in dat
-    )
+    assert "xx loadhyph-xx.tex" not in dat
+    assert "=xxa" not in dat
+    assert "yy loadhyph-yy.tex" in dat
     assert "'xx'" not in (gen / "language.dat.lua").read_text()
     assert not (env / "tex/generic/hyph-utf8/loadhyph/loadhyph-xx.tex").exists()
     archive.uninstall(env, "hyphen-yy", arch=ARCH)
@@ -372,7 +392,8 @@ def test_local_language_file_is_appended_and_can_disable(
     env = new_env(tmp_path)
     install(env, ["hyphen-xx"])
     dat = (env / "texmf-var/tex/generic/config/language.dat").read_text()
-    assert "xx loadhyph-xx.tex" not in dat and dat.endswith("mine mine.tex\n")
+    assert "xx loadhyph-xx.tex" not in dat
+    assert dat.endswith("mine mine.tex\n")
 
 
 # --- uninstall ------------------------------------------------------------
@@ -388,7 +409,8 @@ def test_uninstall_removes_map_format_and_binary_entries(tmp_path: Path, shims) 
     assert "myfmt" not in (env / "web2c" / "fmtutil.cnf").read_text()
     assert len(shims.calls("fmtutil-user")) == 1  # a removal builds nothing
     archive.uninstall(env, f"tool.{ARCH}", arch=ARCH)
-    assert not (env / "bin" / ARCH / "tool").is_symlink() and not (env / "bin").exists()
+    assert not (env / "bin" / ARCH / "tool").is_symlink()
+    assert not (env / "bin").exists()
 
 
 # --- binaries -------------------------------------------------------------
@@ -401,14 +423,13 @@ def test_binfiles_for_selected_arch_only_with_modes_and_links(
     res = install(env, ["tool"])
     assert sorted(res.installed) == ["tool", f"tool.{ARCH}"]
     exe = env / "bin" / ARCH / "helper"
-    assert exe.read_text() == SH and os.access(exe, os.X_OK)
+    assert exe.read_text() == SH
+    assert os.access(exe, os.X_OK)
     link = env / "bin" / ARCH / "tool"
-    assert (
-        link.is_symlink() and os.readlink(link) == "../../scripts/tool/tool.pl"
-    )  # usertree root has no texmf-dist
-    assert link.resolve() == (env / "scripts/tool/tool.pl").resolve() and os.access(
-        link, os.X_OK
-    )
+    assert link.is_symlink()
+    assert Path(link).readlink() == "../../scripts/tool/tool.pl"
+    assert link.resolve() == (env / "scripts/tool/tool.pl").resolve()
+    assert os.access(link, os.X_OK)
     assert not (env / "bin" / "windows").exists()
     stanza = (env / "tlpkg/tlpobj" / f"tool.{ARCH}.tlpobj").read_text()
     assert (
@@ -430,7 +451,7 @@ def test_standalone_binary_symlink_keeps_texmf_dist(tmp_path: Path, shims) -> No
     (env / "bin" / ARCH).mkdir(parents=True)
     install(env, ["tool"], standalone=True)
     link = env / "bin" / ARCH / "tool"
-    assert os.readlink(link) == "../../texmf-dist/scripts/tool/tool.pl"
+    assert Path(link).readlink() == "../../texmf-dist/scripts/tool/tool.pl"
     assert link.resolve() == (env / "texmf-dist/scripts/tool/tool.pl").resolve()
     assert shims.calls("mktexlsr") == []
 
@@ -438,7 +459,8 @@ def test_standalone_binary_symlink_keeps_texmf_dist(tmp_path: Path, shims) -> No
 def test_foreign_arch_is_never_installed(tmp_path: Path) -> None:
     env = new_env(tmp_path)
     res = install(env, ["tool.windows"])
-    assert res.installed == [] and "tool.windows" in res.skipped
+    assert res.installed == []
+    assert "tool.windows" in res.skipped
     assert not (env / "bin" / "windows").exists()
 
 
@@ -470,11 +492,12 @@ def test_failed_download_lists_package_and_never_calls_tlmgr(
         arch=ARCH,
         notice=notes.append,
     )
-    assert (
-        res.failed == ["fontpkg"] and res.installed == ["trig"] and res.fallback == {}
-    )
+    assert res.failed == ["fontpkg"]
+    assert res.installed == ["trig"]
+    assert res.fallback == {}
     assert any("fontpkg" in n for n in notes)
-    assert shims.calls("tlmgr") == [] and shims.calls("updmap-user") == []
+    assert shims.calls("tlmgr") == []
+    assert shims.calls("updmap-user") == []
 
 
 # --- ignored postactions ---------------------------------------------------
@@ -492,6 +515,7 @@ def test_windows_postactions_are_ignored_silently(tmp_path: Path, shims) -> None
             "filetype extension=.y",
         ],
     )
-    assert b.problems == [] and b.scripts == []
+    assert b.problems == []
+    assert b.scripts == []
     b.note("p", "install", ["frob it"], ["bogus x=1"])
     assert len(b.problems) == 2

@@ -51,7 +51,8 @@ def _listing(root: Path) -> list[tuple[str, list[str]]]:
                     (e for e in it if e.name not in SKIPPED), key=lambda e: e.name
                 )
         except OSError as e:
-            raise LsrError(f"cannot read {path}: {e}") from e
+            msg = f"cannot read {path}: {e}"
+            raise LsrError(msg) from e
         names = [e.name for e in entries]
         if label == "." and NAME not in names:
             names = sorted([*names, NAME])  # the file we are about to write
@@ -84,7 +85,8 @@ def write(root: Path) -> Path:
         ``root`` is not a directory, or not writable.
     """
     if not root.is_dir():
-        raise LsrError(f"{root} is not a directory")
+        msg = f"{root} is not a directory"
+        raise LsrError(msg)
     text = render(root)
     target = root / NAME
     try:
@@ -93,12 +95,13 @@ def write(root: Path) -> Path:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(text)
             Path(tmp).chmod(0o644)
-            os.replace(tmp, target)
+            Path(tmp).replace(target)
         except BaseException:
             Path(tmp).unlink(missing_ok=True)
             raise
     except OSError as e:
-        raise LsrError(f"cannot write {target}: {e}") from e
+        msg = f"cannot write {target}: {e}"
+        raise LsrError(msg) from e
     return target
 
 

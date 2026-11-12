@@ -3,16 +3,16 @@
 import hashlib
 import io
 import os
-import time
 import tarfile
+import time
 from pathlib import Path
+from typing import Never
 
 import httpx
 import pytest
+import shims as shims_mod
 
 from texi import archive, tlpdb
-
-import shims as shims_mod
 
 
 def _container(files: dict[str, str], name: str) -> bytes:
@@ -166,8 +166,9 @@ def test_http_error_leaves_nothing(store: Path) -> None:
 def test_extract_is_atomic(store: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pkg = tlpdb.parse_tlpdb(_db_text()).get("bar")
 
-    def crash(*a, **k):
-        raise OSError("disk full")
+    def crash(*a, **k) -> Never:
+        msg = "disk full"
+        raise OSError(msg)
 
     monkeypatch.setattr(tarfile.TarFile, "extractall", crash)
     with pytest.raises(archive.ArchiveError):
@@ -181,11 +182,13 @@ def test_offline_reuse(store: Path) -> None:
     archive.fetch(REPO, db.get("bar"), client=make_client())
 
     def offline(req: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("offline")
+        msg = "offline"
+        raise httpx.ConnectError(msg)
 
     client = httpx.Client(transport=httpx.MockTransport(offline))
     entry, fresh = archive.fetch(REPO, db.get("bar"), client=client)
-    assert not fresh and archive.lookup(REPO, db.get("bar")) is not None
+    assert not fresh
+    assert archive.lookup(REPO, db.get("bar")) is not None
     assert entry.package_dir.is_dir()
 
 
@@ -201,7 +204,8 @@ def test_file_repository(store: Path, tmp_path: Path) -> None:
     (repo / "archive").mkdir(parents=True)
     (repo / "archive" / "bar.tar.xz").write_bytes(BLOBS["bar"])
     entry, fresh = archive.fetch(repo.as_uri(), pkg)
-    assert fresh and (entry.package_dir / "tex/latex/bar/bar.sty").exists()
+    assert fresh
+    assert (entry.package_dir / "tex/latex/bar/bar.sty").exists()
 
 
 # --- install -------------------------------------------------------------
@@ -218,7 +222,8 @@ def test_usermode_layout_closure_and_actions(tmp_path: Path, shims) -> None:
     assert (env / "fonts/tfm/public/foo/foo.tfm").exists()
     assert not (env / "tlpkg" / "tlpobj" / "tlpkg").exists()
     # execute lines are handled here; collections, system and .ARCH packages are skipped
-    assert res.fallback == {} and res.failed == []
+    assert res.fallback == {}
+    assert res.failed == []
     assert (env / "tex/latex/baz/baz.sty").exists()
     assert "execute addMap baz.map" in (env / "tlpkg/tlpobj/baz.tlpobj").read_text()
     assert "Map baz.map\n" in (env / "web2c/updmap.cfg").read_text()
@@ -241,7 +246,8 @@ def test_bookkeeping_parses(tmp_path: Path) -> None:
     out = tlpdb.parse_tlpdb((env / "tlpkg" / "texlive.tlpdb").read_text())
     assert set(out.names()) >= {"00texlive.installation", "foo", "bar"}
     foo = out.get("foo")
-    assert foo.revision == "100" and foo.category == "Package"
+    assert foo.revision == "100"
+    assert foo.category == "Package"
     assert foo.depends[0] == "bar"
     assert [f.path for f in foo.files["runfiles"]] == [
         "tex/latex/foo/foo.sty",
@@ -264,7 +270,9 @@ def test_second_project_downloads_nothing(tmp_path: Path) -> None:
     run(db, new_env(tmp_path, "a"))
     hits: list[str] = []
     res = run(db, new_env(tmp_path, "b"), client=make_client(hits))
-    assert hits == [] and res.downloaded == [] and res.cached == len(res.installed) == 3
+    assert hits == []
+    assert res.downloaded == []
+    assert res.cached == len(res.installed) == 3
 
 
 def test_merge_into_shared_dirs_and_reclone_idempotent(tmp_path: Path) -> None:
@@ -279,9 +287,7 @@ def test_merge_into_shared_dirs_and_reclone_idempotent(tmp_path: Path) -> None:
     archive_tree.flush()
     assert n == 3
     assert sorted(p.name for p in shared.iterdir()) == ["bar", "baz", "foo"]
-    names = [
-        n for n in tlpdb.parse_tlpdb((env / "tlpkg/texlive.tlpdb").read_text()).names()
-    ]
+    names = list(tlpdb.parse_tlpdb((env / "tlpkg/texlive.tlpdb").read_text()).names())
     assert names.count("foo") == 1
 
 
@@ -301,7 +307,7 @@ def test_edit_does_not_change_store(tmp_path: Path) -> None:
 def test_copy_fallback_when_clone_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def nope(src, dst):
+    def nope(src, dst) -> Never:
         raise OSError(18, "cross-device")
 
     monkeypatch.setattr(archive, "_clone_native", nope)
@@ -319,7 +325,8 @@ def test_native_clone_is_not_a_hardlink(tmp_path: Path) -> None:
     src.write_text("a")
     dst = tmp_path / "sub" / "d"
     archive.clone_file(src, dst)
-    assert dst.read_text() == "a" and os.stat(dst).st_ino != os.stat(src).st_ino
+    assert dst.read_text() == "a"
+    assert Path(dst).stat().st_ino != Path(src).stat().st_ino
     archive.clone_file(src, dst)  # replacing works
 
 
@@ -336,7 +343,8 @@ def test_uninstall_removes_exactly_recorded_files(tmp_path: Path) -> None:
     assert not (env / "fonts").exists()  # emptied dirs pruned
     assert not (env / "tlpkg/tlpobj/foo.tlpobj").exists()
     names = tlpdb.parse_tlpdb((env / "tlpkg/texlive.tlpdb").read_text()).names()
-    assert "foo" not in names and "bar" in names
+    assert "foo" not in names
+    assert "bar" in names
     assert "foo" not in archive.managed(env)
 
 
@@ -350,17 +358,20 @@ def test_update_replaces_old_revision(tmp_path: Path) -> None:
     )
     db2 = tlpdb.parse_tlpdb(new_text)
     res = run(db2, env, roots=["bar"])
-    assert res.updated == ["bar"] and archive.installed_revision(env, "bar") == 6
+    assert res.updated == ["bar"]
+    assert archive.installed_revision(env, "bar") == 6
     assert archive.managed(env)["bar"]["revision"] == "6"
     res = run(db2, env, roots=["bar"])  # now current
-    assert res.installed == [] and res.present == ["bar"]
+    assert res.installed == []
+    assert res.present == ["bar"]
     res = run(
         tlpdb.parse_tlpdb(new_text.replace("revision 6", "revision 7", 1)),
         env,
         roots=["bar"],
         update=False,
     )
-    assert res.installed == [] and archive.installed_revision(env, "bar") == 6
+    assert res.installed == []
+    assert archive.installed_revision(env, "bar") == 6
 
 
 def test_download_failure_is_reported_never_tlmgr(
@@ -372,9 +383,14 @@ def test_download_failure_is_reported_never_tlmgr(
     res = run(
         db, env, roots=["bar"], client=make_client(corrupt=True), notice=notes.append
     )
-    assert res.installed == [] and res.failed == ["bar"] and res.fallback == {}
-    assert notes and "sha512" in notes[0] and "tlmgr" not in notes[0]
-    assert list(store.iterdir()) == [] and not (env / "tex/latex/bar").exists()
+    assert res.installed == []
+    assert res.failed == ["bar"]
+    assert res.fallback == {}
+    assert notes
+    assert "sha512" in notes[0]
+    assert "tlmgr" not in notes[0]
+    assert list(store.iterdir()) == []
+    assert not (env / "tex/latex/bar").exists()
     assert shims.calls("tlmgr") == []
 
 
@@ -384,7 +400,8 @@ def test_missing_checksum_is_a_failure(tmp_path: Path) -> None:
     res = run(
         tlpdb.parse_tlpdb(text), new_env(tmp_path), roots=["foo"], notice=notes.append
     )
-    assert "foo" in res.failed and any("no container checksum" in n for n in notes)
+    assert "foo" in res.failed
+    assert any("no container checksum" in n for n in notes)
 
 
 def test_root_collection_is_expanded_and_recorded(tmp_path: Path) -> None:
@@ -392,14 +409,17 @@ def test_root_collection_is_expanded_and_recorded(tmp_path: Path) -> None:
     env = new_env(tmp_path)
     res = run(db, env, roots=["collection-x"])
     assert sorted(res.installed) == ["bar", "baz", "foo"]
-    assert res.recorded == ["collection-x"] and "collection-x" not in res.fallback
+    assert res.recorded == ["collection-x"]
+    assert "collection-x" not in res.fallback
     assert res.fallback == {}
     obj = (env / "tlpkg/tlpobj/collection-x.tlpobj").read_text()
-    assert "category Collection" in obj and "runfiles" not in obj
+    assert "category Collection" in obj
+    assert "runfiles" not in obj
     assert "collection-x" in (env / "tlpkg/texlive.tlpdb").read_text()
     assert archive.managed(env)["collection-x"]["revision"] == "1"
     res = run(db, env, roots=["collection-x"])  # recorded: nothing left to do
-    assert res.recorded == [] and "collection-x" in res.present
+    assert res.recorded == []
+    assert "collection-x" in res.present
 
 
 def test_install_order_is_dependencies_first(tmp_path: Path) -> None:
@@ -422,7 +442,9 @@ def test_plan_contract(tmp_path: Path) -> None:
         db, ["foo"], new_env(tmp_path), standalone=False, system_installed=system
     )
     assert pl.install == ["bar", "baz", "foo"]
-    assert pl.fallback == {} and pl.present == [] and pl.updates == []
+    assert pl.fallback == {}
+    assert pl.present == []
+    assert pl.updates == []
     assert pl.resolution.skipped["sysdep"] == "installed in the system TeX Live"
     assert calls == [["foo"], ["bar", "baz", "sysdep"]]  # once per level
 
@@ -462,12 +484,11 @@ def test_arch_dependency_goes_to_the_selected_arch(tmp_path: Path) -> None:
     db = tlpdb.parse_tlpdb(text)
     env = new_env(tmp_path)
     pl = archive.plan(db, ["foo"], env, standalone=False, arch="universal-darwin")
-    assert "bin.universal-darwin" in pl.install and pl.fallback == {}
+    assert "bin.universal-darwin" in pl.install
+    assert pl.fallback == {}
     pl = archive.plan(db, ["foo"], env, standalone=False, arch="windows")
-    assert (
-        "bin.windows" in pl.resolution.skipped
-        and "bin.universal-darwin" not in pl.install
-    )
+    assert "bin.windows" in pl.resolution.skipped
+    assert "bin.universal-darwin" not in pl.install
 
 
 def test_usertree_non_relocatable_is_skipped(tmp_path: Path) -> None:
@@ -478,11 +499,15 @@ def test_usertree_non_relocatable_is_skipped(tmp_path: Path) -> None:
     notes: list[str] = []
     env = new_env(tmp_path)
     res = run(db, env, roots=["bar"], notice=notes.append)
-    assert list(res.skipped) == ["bar"] and "not relocatable" in res.skipped["bar"]
-    assert res.installed == [] and res.fallback == {} and res.failed == []
+    assert list(res.skipped) == ["bar"]
+    assert "not relocatable" in res.skipped["bar"]
+    assert res.installed == []
+    assert res.fallback == {}
+    assert res.failed == []
     assert any("bar not installed" in n for n in notes)
     pl = archive.plan(db, ["bar"], new_env(tmp_path, "full"), standalone=True)
-    assert pl.install == ["bar"] and pl.skipped == {}  # a full tree takes it
+    assert pl.install == ["bar"]
+    assert pl.skipped == {}
 
 
 def test_dependencies_with_actions_are_installed(tmp_path: Path) -> None:
@@ -492,7 +517,8 @@ def test_dependencies_with_actions_are_installed(tmp_path: Path) -> None:
         1,
     )
     res = run(tlpdb.parse_tlpdb(text), new_env(tmp_path), roots=["bar", "foo"])
-    assert {"bar", "foo", "baz"} <= set(res.installed) and res.fallback == {}
+    assert {"bar", "foo", "baz"} <= set(res.installed)
+    assert res.fallback == {}
 
 
 def test_no_tlmgr_invocation_in_sources() -> None:
@@ -511,7 +537,8 @@ def test_download_retries_then_succeeds() -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         calls["n"] += 1
         if calls["n"] < 3:
-            raise httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED]")
+            msg = "[SSL: CERTIFICATE_VERIFY_FAILED]"
+            raise httpx.ConnectError(msg)
         return good.send(req)
 
     notes: list[str] = []
@@ -519,8 +546,10 @@ def test_download_retries_then_succeeds() -> None:
     entry, fresh = archive.fetch(
         REPO, db.get("bar"), client=client, notice=notes.append
     )
-    assert fresh and calls["n"] == 3
-    assert len(notes) == 2 and "retrying" in notes[0]
+    assert fresh
+    assert calls["n"] == 3
+    assert len(notes) == 2
+    assert "retrying" in notes[0]
 
 
 def test_download_gives_up_and_install_is_not_done(tmp_path: Path) -> None:
@@ -529,7 +558,8 @@ def test_download_gives_up_and_install_is_not_done(tmp_path: Path) -> None:
 
     def handler(req: httpx.Request) -> httpx.Response:
         calls["n"] += 1
-        raise httpx.ConnectError("[SSL: CERTIFICATE_VERIFY_FAILED]")
+        msg = "[SSL: CERTIFICATE_VERIFY_FAILED]"
+        raise httpx.ConnectError(msg)
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     labels: list[tuple[str, int, int]] = []
@@ -560,9 +590,15 @@ def test_hash_mismatch_installs_with_warning_when_not_verifying(
     env = new_env(tmp_path)
     notes: list[str] = []
     res = run(
-        db, env, roots=["bar"], client=_stale_client(), notice=notes.append, verify=False
+        db,
+        env,
+        roots=["bar"],
+        client=_stale_client(),
+        notice=notes.append,
+        verify=False,
     )
-    assert res.installed == ["bar"] and res.failed == []
+    assert res.installed == ["bar"]
+    assert res.failed == []
     assert (env / "tex/latex/bar/bar.sty").read_text() == "% old bar\n"
     assert any("hash mismatched" in n and "stale mirror" in n for n in notes)
     # stored under the sha512 it really has, never as the indexed build
@@ -580,7 +616,8 @@ def test_hash_mismatch_fails_when_verifying(tmp_path: Path, store: Path) -> None
         client=_stale_client(),
         verify=True,
     )
-    assert res.failed == ["bar"] and list(store.iterdir()) == []
+    assert res.failed == ["bar"]
+    assert list(store.iterdir()) == []
 
 
 def test_verify_checksums_defaults_to_on() -> None:
@@ -618,7 +655,8 @@ def test_first_download_uses_the_index_mirror_then_the_redirector() -> None:
         notice=notes.append,
         mirror="https://pinned.example/tlnet",
     )
-    assert fresh and seen == ["pinned.example", "repo.example"]
+    assert fresh
+    assert seen == ["pinned.example", "repo.example"]
     assert "retrying" in notes[0]
 
 
@@ -656,14 +694,17 @@ class _Ctan:
         return httpx.Client(transport=httpx.MockTransport(handler))
 
 
-def test_tex_fmt_is_installed_from_a_direct_url_once(tmp_path: Path, store: Path) -> None:
+def test_tex_fmt_is_installed_from_a_direct_url_once(
+    tmp_path: Path, store: Path
+) -> None:
     from texi import texfmt
 
     ctan = _Ctan()
     client = ctan.client()
     env = tmp_path / "p" / ".texenv"
     got = texfmt.ensure(env, "x86_64-linux", client=client)
-    assert got == env / "bin/x86_64-linux/tex-fmt" and os.access(got, os.X_OK)
+    assert got == env / "bin/x86_64-linux/tex-fmt"
+    assert os.access(got, os.X_OK)
     assert ctan.hits == [
         "/json/2.0/pkg/latex-formatter",
         "/support/latex-formatter/bin/tex-fmt-x86_64-linux.tar.gz",
@@ -701,7 +742,8 @@ def test_tex_fmt_failure_is_only_a_notice(tmp_path: Path, store: Path) -> None:
     notes: list[str] = []
     env = tmp_path / ".texenv"
     assert texfmt.ensure(env, "x86_64-linux", client=down, notice=notes.append) is None
-    assert notes and "tex-fmt not installed" in notes[0]
+    assert notes
+    assert "tex-fmt not installed" in notes[0]
     # a tree that has one keeps it, silently, when CTAN cannot be reached
     texfmt.ensure(env, "x86_64-linux", client=_Ctan().client())
     notes.clear()
@@ -730,10 +772,16 @@ def test_prune_keeps_used_and_removes_old_and_unused(
         os.utime(root / n, (old, old))
     dry = archive.prune({"bar-6-bbbbbbb"}, dry_run=True)
     assert [i for i, _ in dry] == [
-        ".dl-y.partial", ".tmp-x", "bar-5-aaaaaaa", "baz-1-ccccccc", "partial"
+        ".dl-y.partial",
+        ".tmp-x",
+        "bar-5-aaaaaaa",
+        "baz-1-ccccccc",
+        "partial",
     ]
     assert (root / "bar-5-aaaaaaa").exists()
     archive.prune({"bar-6-bbbbbbb"})
     assert sorted(p.name for p in root.iterdir()) == [
-        ".DS_Store", "bar-6-bbbbbbb", "fresh"
+        ".DS_Store",
+        "bar-6-bbbbbbb",
+        "fresh",
     ]
