@@ -328,7 +328,23 @@ class Tlpdb:
         True when served from the cache without a fresh download.
     offline
         True when the cache was used because the network failed.
+    previous_revisions
+        After a fresh download: ``name -> revision`` of the index it replaced, or None.
+    stale_mirror
+        True when every download was older than the cached index, so the cached
+        one was kept.
+    changed
+        After a fresh download: False if it is byte-identical to the copy it
+        replaced, True if not, None if there was no earlier copy (or no download).
     """
+
+    def revisions(self) -> dict[str, int]:
+        """``name -> revision`` of every package that has a numeric revision."""
+        return {
+            n: int(r)
+            for n, r in self._conn.execute("SELECT name, revision FROM pkg")
+            if str(r).isdigit()
+        }
 
     def __init__(self, conn: sqlite3.Connection, index_path: Path | None = None):
         self._conn = conn
@@ -347,6 +363,9 @@ class Tlpdb:
         self.cache_path: Path | None = None
         self.from_cache = False
         self.offline = False
+        self.changed: bool | None = None
+        self.stale_mirror = False
+        self.previous_revisions: dict[str, int] | None = None
         self._cache: dict[str, TlPackage] = {}
         self._has_fts = (
             conn.execute(
@@ -1282,6 +1301,16 @@ def _open_index(path: Path) -> Tlpdb:
         raise
 
 
+#: Extra downloads when a mirror serves an index older than the cached one.
+STALE_RETRIES = 3
+_REVISION_LINE = re.compile(r"^revision (\d+)$", re.MULTILINE)
+
+
+def _newest_revision(text: str) -> int:
+    """The highest package revision in tlpdb text: dates the index (SVN revisions)."""
+    return max((int(m) for m in _REVISION_LINE.findall(text)), default=0)
+
+
 def has_cache(repository: str) -> bool:
     """True if an index or a downloaded copy of ``repository`` is cached."""
     key = hashlib.sha1(normalize_repository(repository).encode()).hexdigest()
@@ -1401,6 +1430,38 @@ def load_remote(
         ) from e
 
     text, comp = _decode(body)  # validate before replacing the cache
+    previous: bytes | None = None
+    old_revisions: dict[str, int] | None = None
+    try:
+        previous = xz.read_bytes() if xz.is_file() else None
+        if db_path.is_file():
+            old = _open_index(db_path)
+            try:
+                old_revisions = old.revisions()
+            finally:
+                old._conn.close()
+    except (OSError, sqlite3.Error):
+        pass
+    # The redirector may hand us a mirror that is behind the copy we already have.
+    # Ask again (another mirror answers); if all are older keep the cached index.
+    old_top = max(old_revisions.values(), default=0) if old_revisions else 0
+    for _ in range(STALE_RETRIES):
+        if _newest_revision(text) >= old_top:
+            break
+        try:
+            with urlopen(Request(url, headers={"User-Agent": USER_AGENT}), timeout=TIMEOUT) as r2:
+                body2 = r2.read()
+                final2 = r2.geturl() if hasattr(r2, "geturl") else url
+                etag, last_mod = r2.headers.get("ETag"), r2.headers.get("Last-Modified")
+            text2, comp2 = _decode(body2)
+        except (urllib.error.URLError, OSError, TimeoutError, TlpdbError):
+            break
+        body, text, comp, final = body2, text2, comp2, final2
+    if old_top and _newest_revision(text) < old_top:
+        kept = open_cached(from_cache=True)
+        if kept is not None:
+            kept.stale_mirror = True
+            return kept
     cdir.mkdir(parents=True, exist_ok=True)
     tmp = xz.with_suffix(".xz.tmp")
     tmp.write_bytes(body)
@@ -1415,6 +1476,8 @@ def load_remote(
     db = open_cached(from_cache=False)
     if db is None:
         raise TlpdbError(f"cannot open the index {db_path}")
+    db.changed = None if previous is None else previous != body
+    db.previous_revisions = old_revisions
     return db
 
 

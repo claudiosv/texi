@@ -30,7 +30,7 @@ from rich.markup import escape
 from rich.text import Text
 from rich.tree import Tree
 
-from texi import archive, deptree, logparse_bib, lsr, pdffonts, texenv, texfmt, tools
+from texi import archive, deptree, latexmk_files, logparse_bib, lsr, pdffonts, texenv, texfmt, tools, unused as unused_mod
 from texi import tlpdb as tlpdb_mod
 from texi.ctan import CtanClient
 from texi.logparse import (
@@ -503,16 +503,80 @@ def _resolver_tlpdb(
         repo, _ = tlpdb_mod.resolve_repository(None, None)
         if not tlpdb_mod.has_cache(repo):
             console.print("[dim]Building TeX Live package index…[/dim]")
-        db = tlpdb_mod.load(repo, refresh=True) if refresh else tlpdb_mod.load(repo)
-        if refresh and db is not None and getattr(db, "offline", False):
+        if refresh:
             console.print(
-                "[yellow]Could not reach the repository; using the cached package index.[/yellow]"
+                f"[blue]Fetching the latest package index from {escape(repo)}…[/blue]"
             )
+            db = tlpdb_mod.load(repo, refresh=True)
+            _report_index(console, db, repo)
+        else:
+            db = tlpdb_mod.load(repo)
     except (tlpdb_mod.TlpdbError, OSError, sqlite3.Error) as e:
         if DEBUG:
             console.print(f"[dim]tlpdb index unavailable: {escape(str(e))}[/dim]")
     _tlpdb_memo = db
     return db
+
+
+def _index_change(db: tlpdb_mod.Tlpdb) -> tuple[str, bool]:
+    """Compare a freshly downloaded index with the one it replaced, by package revisions.
+
+    Every package revision is a TeX Live SVN revision, so the highest one dates the
+    index: a mirror that is behind serves a lower maximum. Returns the message and
+    whether the new index is at least as new as the old one.
+    """
+    old = db.previous_revisions
+    if not old:
+        return "Downloaded an updated package index", True
+    new = db.revisions()
+    changed = sum(1 for n, r in new.items() if n in old and old[n] != r)
+    added = len(new.keys() - old.keys())
+    removed = len(old.keys() - new.keys())
+    top_new, top_old = max(new.values(), default=0), max(old.values(), default=0)
+    detail = f"{changed} changed, {added} new, {removed} removed"
+    if top_new > top_old:
+        return f"Downloaded a newer package index (r{top_old} → r{top_new}; {detail})", True
+    if top_new < top_old:
+        return (
+            f"Downloaded an OLDER package index (r{top_new}, cached r{top_old}; "
+            f"{detail}): the mirror looks stale"
+        ), False
+    return (
+        f"Downloaded a package index with the same newest revision r{top_new} ({detail})",
+        True,
+    )
+
+
+def _report_index(console: Console, db: tlpdb_mod.Tlpdb, repo: str) -> None:
+    """Say where the package index came from and whether it changed."""
+    source = str(getattr(db, "source", "") or repo)
+    mirror = source.removesuffix("/tlpkg/texlive.tlpdb.xz")
+    via = f" (via {escape(mirror)})" if mirror.rstrip("/") != repo.rstrip("/") else ""
+    if getattr(db, "offline", False):
+        when = f" from {db.fetched:%Y-%m-%d %H:%M}" if db.fetched else ""
+        console.print(
+            f"[yellow]Could not reach {escape(repo)}; using the cached package index"
+            f"{when}.[/yellow]"
+        )
+    elif getattr(db, "stale_mirror", False):
+        console.print(
+            "[yellow]⚠ The mirrors offered an older package index than the cached one; "
+            f"kept the cached index from {db.fetched:%Y-%m-%d %H:%M}.[/yellow]"
+        )
+    elif db.from_cache:
+        console.print(
+            f"[green]✔ Package index is up to date (the repository reports it unchanged){via}[/green]"
+        )
+    elif db.changed is None:
+        console.print(f"[green]✔ Downloaded the package index{via}[/green]")
+    elif not db.changed:
+        console.print(
+            f"[green]✔ Downloaded the package index; identical to the cached copy{via}[/green]"
+        )
+    else:
+        text, fresh = _index_change(db)
+        mark = "[green]✔" if fresh else "[yellow]⚠"
+        console.print(f"{mark} {escape(text)}{via}[/]")
 
 
 def _tlpdb_bundles(db: tlpdb_mod.Tlpdb, name: str, exts: tuple[str, ...]) -> list[str]:
@@ -2671,6 +2735,101 @@ def _has_seen(n: deptree.Node) -> bool:
     return n.seen or any(_has_seen(c) for c in n.children)
 
 
+@app.command(
+    help="List packages in texproject.toml that the last build and your sources do not use.",
+    rich_help_panel="Project",
+)
+def unused(debug: DebugOpt = False) -> None:
+    """Packages you can remove from texproject.toml without changing the build."""
+    _intro("texi unused")
+    cwd = Path.cwd()
+    env_dir = cwd / ".texenv"
+    config = load_project_config(cwd / "texproject.toml")
+    if not (env_dir / "tlpkg" / "texlive.tlpdb").is_file():
+        console.print("[red]No .texenv/ yet. Run `texi sync`.[/red]")
+        raise typer.Exit(code=1)
+    aux = cwd / config.build.aux_dir
+    names = (
+        [config.set_jobname]
+        if config.set_jobname
+        else [Path(f).stem for f in config.main_files]
+    )
+    roots = [str(env_dir), str(env_dir.resolve())]
+    paths: set[str] = set()
+    built = False
+    for name in dict.fromkeys(names):
+        files = latexmk_files.ProjectFiles.from_build(aux, name)
+        if files.fls is not None:
+            built = True
+            paths.update(files.fls.resolved_inputs())
+        if (log := aux / f"{name}.log").is_file():
+            paths |= unused_mod.log_paths(log.read_text(encoding="utf-8", errors="replace"), roots)
+    if not built:
+        console.print(
+            "[red]No build record found. Run `texi build` first: without it every package "
+            "would look unused.[/red]"
+        )
+        raise typer.Exit(code=1)
+    owners = unused_mod.file_owners(env_dir)
+    used = unused_mod.owners_of(paths, env_dir, owners)
+    if not used:
+        console.print(
+            "[red]The build record does not mention this .texenv/ (copied from another "
+            "directory, or built before .texenv/ moved?). Run `texi build --full` first.[/red]"
+        )
+        raise typer.Exit(code=1)
+    if any(aux.glob("*.bcf")):  # biber runs from latexmk and leaves no input behind
+        used |= {"biber", "biblatex"}
+    # what the sources name, even if the build did not need a file of it
+    found = extract_packages_from_tex(cwd, _source_files(cwd))
+    if found:
+        used |= set(resolve_dependencies(found, console))
+    g = deptree.read(env_dir, _target_arch(env_dir))
+    cats = _categories(env_dir)
+    rep = unused_mod.analyze(g, config.dependencies, used, cats)
+    _print_unused(rep)
+
+
+def _categories(env_dir: Path) -> dict[str, str]:
+    """`name -> category` of the packages in the tree's tlpdb."""
+    out: dict[str, str] = {}
+    name = None
+    for line in (env_dir / "tlpkg" / "texlive.tlpdb").read_text(encoding="utf-8").splitlines():
+        if line.startswith("name "):
+            name = line[5:].strip()
+        elif line.startswith("category ") and name:
+            out[name] = line[9:].strip()
+    return out
+
+
+def _print_unused(rep: unused_mod.Report) -> None:
+    if rep.unused:
+        _note(
+            title=f"{len(rep.unused)} unused: likely safe to remove from texproject.toml",
+            content=[escape(", ".join(rep.unused))],
+        )
+    if rep.needed:
+        _note(
+            title=f"{len(rep.needed)} only needed by other packages (redundant entries)",
+            content=[
+                escape(f"{n}  ← {', '.join(by[:3])}{' …' if len(by) > 3 else ''}")
+                for n, by in sorted(rep.needed.items())
+            ],
+        )
+    if rep.not_installed:
+        console.print(
+            f"[yellow]Not installed: {escape(', '.join(rep.not_installed))}. Run `texi sync`.[/yellow]"
+        )
+    kept = len(rep.used) + len(rep.via_collection)
+    if not rep.unused and not rep.needed:
+        outro(f"[green]✔ All {kept} dependencies are used[/green]")
+    else:
+        outro(
+            f"{kept} used, {len(rep.unused)} unused, {len(rep.needed)} redundant. "
+            "Packages the build needs but you did not list are installed anyway."
+        )
+
+
 class ShellName(str, Enum):
     BASH = "bash"
     ZSH = "zsh"
@@ -2751,6 +2910,7 @@ _ORDER = [
     "fix_pdf",
     "fmt",
     "export",
+    "unused",
     "tree",
     "build_tree",
     "activate",

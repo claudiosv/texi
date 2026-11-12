@@ -826,3 +826,68 @@ def test_real_index_pseudo_records_stay_out_of_edges() -> None:
         pkg = real.get(name)
         assert pkg is not None
         assert not any(resolver.is_pseudo_record(name, d) for d in pkg.depends), name
+
+
+def test_refresh_reports_whether_the_download_differs(
+    cache: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`changed` compares the new bytes with the cached copy: None, False, then True."""
+    import io
+    import lzma
+
+    def body(rev: str) -> bytes:
+        return lzma.compress(f"name 00texlive.config\ncategory TLCore\nrevision {rev}\n".encode())
+
+    current = {"b": body("1")}
+
+    class Resp(io.BytesIO):
+        headers: dict[str, str] = {}
+
+        def geturl(self) -> str:
+            return "https://m.example/tlnet/tlpkg/texlive.tlpdb.xz"
+
+    monkeypatch.setattr(tl, "urlopen", lambda req, timeout=None: Resp(current["b"]))
+    assert tl.load_remote("https://r.example/tlnet", refresh=True).changed is None
+    assert tl.load_remote("https://r.example/tlnet", refresh=True).changed is False
+    current["b"] = body("2")
+    assert tl.load_remote("https://r.example/tlnet", refresh=True).changed is True
+
+
+def test_older_download_from_a_stale_mirror_is_not_kept(
+    cache: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import io
+    import lzma
+
+    def body(rev: str) -> bytes:
+        return lzma.compress(
+            f"name 00texlive.config\ncategory TLCore\nrevision 1\n\n"
+            f"name pkg\ncategory Package\nrevision {rev}\n".encode()
+        )
+
+    served = [body("200")]
+    calls: list[int] = []
+
+    class Resp(io.BytesIO):
+        headers: dict[str, str] = {}
+
+        def geturl(self) -> str:
+            return "https://m.example/tlnet/tlpkg/texlive.tlpdb.xz"
+
+    def fake(req, timeout=None):
+        calls.append(1)
+        return Resp(served[min(len(calls), len(served)) - 1])
+
+    monkeypatch.setattr(tl, "urlopen", fake)
+    assert tl.load_remote("https://r.example/tlnet", refresh=True).revisions()["pkg"] == 200
+    # every mirror is behind: keep the cached index
+    served[:] = [body("150")]
+    calls.clear()
+    db = tl.load_remote("https://r.example/tlnet", refresh=True)
+    assert db.stale_mirror and db.revisions()["pkg"] == 200
+    assert len(calls) == 1 + tl.STALE_RETRIES
+    # the second mirror is current: use it
+    served[:] = [body("150"), body("210")]
+    calls.clear()
+    db = tl.load_remote("https://r.example/tlnet", refresh=True)
+    assert not db.stale_mirror and db.revisions()["pkg"] == 210 and len(calls) == 2

@@ -107,3 +107,23 @@ It sets `PATH` (the tree's `bin/<arch>` first), the `TEXMF*` variables that poin
 |---|---|
 | `--shell <bash\|zsh\|sh\|fish>` | Shell syntax. Default: fish if `$SHELL` is fish, else POSIX. |
 | `--off` | Take `.texenv/` out of `PATH` and unset the variables. Variables that `activate` unset are not restored. |
+
+## `texi unused`
+
+List the packages in `texproject.toml` that the project does not use, so you can remove them. It needs a finished `texi build`: without the build record every package would look unused.
+
+A package counts as used when
+
+- a file of it was read by the last build (the `.fls`/`.fdb_latexmk` inputs and the paths in the `.log`, which also lists embedded fonts), or
+- a `\usepackage`, `\RequirePackage` or `\documentclass` in your sources resolves to it, or
+- it is `latexmk`, or `biber`/`biblatex` when a `.bcf` file exists (biber leaves no input behind).
+
+The result has three parts:
+
+| part | meaning |
+|---|---|
+| unused | no evidence of use: likely safe to remove from `texproject.toml` |
+| redundant | not used itself, but a used package depends on it, so it is installed anyway |
+| used | everything else; a collection counts as used when it supplies a used package |
+
+A package whose file is shadowed by a copy in your project (for example `acmart.cls` in the project directory) is reported unused, because the build reads your copy. Nothing is removed for you.

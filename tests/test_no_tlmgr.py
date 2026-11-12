@@ -15,6 +15,7 @@ from texi import cli, texenv, tlpdb, tools
 from test_archive import REPO, _db_text, make_client
 
 runner = CliRunner()
+_REAL_RESOLVER_TLPDB = cli._resolver_tlpdb  # the fixtures replace it
 
 SYSTEM_TLPDB = """\
 name 00texlive.config
@@ -450,3 +451,53 @@ def test_sync_refreshes_the_index_unless_no_upgrade(
     calls.clear()
     assert runner.invoke(cli.app, ["sync", "--no-upgrade"]).exit_code == 0
     assert True not in calls
+
+
+def test_sync_says_where_the_index_comes_from(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    texenv.init_usertree(project / ".texenv", REPO)
+    db = tlpdb.parse_tlpdb(_db_text())
+    db.source = "https://mirrors.example/CTAN/systems/texlive/tlnet/tlpkg/texlive.tlpdb.xz"
+    db.from_cache = False
+    db.offline = False
+
+    def load(repo, refresh=False):
+        return db
+
+    monkeypatch.setattr(cli, "_resolver_tlpdb", _REAL_RESOLVER_TLPDB)
+    monkeypatch.setattr(cli.tlpdb_mod, "load", load)
+    cli._reset_tlpdb_memo()
+    r = runner.invoke(cli.app, ["sync"])
+    assert r.exit_code == 0, r.output
+    assert f"Fetching the latest package index from {REPO}" in " ".join(r.output.split())
+    flat = " ".join(r.output.split())  # the console wraps long lines
+    assert "Downloaded the package index (via https://mirrors.example/CTAN" in flat
+    cli._reset_tlpdb_memo()
+    db.changed = True
+    db.previous_revisions = None
+    flat = " ".join(runner.invoke(cli.app, ["sync"]).output.split())
+    assert "Downloaded an updated package index" in flat
+    cli._reset_tlpdb_memo()
+    top = max(db.revisions().values())
+    db.previous_revisions = {**{n: r - 1 for n, r in db.revisions().items()}, "gone": 1}
+    flat = " ".join(runner.invoke(cli.app, ["sync"]).output.split())
+    assert f"Downloaded a newer package index (r{top - 1} → r{top};" in flat
+    assert "1 removed" in flat and "0 new" in flat
+    cli._reset_tlpdb_memo()
+    db.previous_revisions = {n: r + 1000 for n, r in db.revisions().items()}
+    flat = " ".join(runner.invoke(cli.app, ["sync"]).output.split())
+    assert "OLDER package index" in flat and "stale" in flat
+    cli._reset_tlpdb_memo()
+    db.changed = False
+    flat = " ".join(runner.invoke(cli.app, ["sync"]).output.split())
+    assert "identical to the cached copy" in flat
+    cli._reset_tlpdb_memo()
+    db.from_cache = True
+    r = runner.invoke(cli.app, ["sync"])
+    assert "Package index is up to date" in r.output
+    cli._reset_tlpdb_memo()
+    db.offline = True
+    r = runner.invoke(cli.app, ["sync"])
+    assert "Could not reach" in r.output and "cached package index" in r.output
+    cli._reset_tlpdb_memo()

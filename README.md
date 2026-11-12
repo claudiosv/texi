@@ -21,6 +21,7 @@ An isolated workspace manager for LaTeX projects.
 | `texi fmt [files]` | Formats `.tex` files under `src_dir` with `tex-fmt`, using the settings in `[tex-fmt]`. `--check` only reports. |
 | `texi scan` | Lists the packages your sources use and their TeX Live packages. |
 | `texi build-tree` | Shows which files the last build actually read. |
+| `texi unused` | Lists `texproject.toml` packages the last build and your sources do not use. |
 | `texi activate` | Prints shell code that puts `.texenv/` first: `eval "$(texi activate)"` (`--off` undoes it). |
 | `texi tree` | Shows the packages installed in `.texenv/` as a dependency tree (`--depth`, `--explicit`, `--package`, `--invert`). |
 | `texi doctor` | Checks the TeX install and flags stale user-level formats. |
