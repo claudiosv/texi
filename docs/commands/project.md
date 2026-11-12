@@ -77,3 +77,15 @@ Fetch the latest package index and list the packages in `.texenv/` (and `tex-fmt
 ## `texi update`
 
 The same as `texi sync`: fetch the latest index and update the packages of `.texenv/`. It never touches the system TeX Live.
+
+## `texi tree`
+
+Show the packages installed in `.texenv/` as a dependency tree. By default the roots are the packages that no other installed package depends on. A package that was already shown is marked `(*)` and its subtree is not repeated; `…` marks a subtree cut by `--depth`. The binary halves (`name.<arch>`) of packages are left out.
+
+| option | description |
+|---|---|
+| `--depth`, `-d <n>` | Show at most `n` levels below each root (`0` shows the roots only). |
+| `--explicit` | Only the dependencies in `texproject.toml` and what they depend on. |
+| `--package`, `-p <name>` | Show only this package and its dependencies. |
+| `--invert`, `-i` | With `--package`: show the packages that depend on it instead. |
+| `--debug` | Show every external command texi runs. |

@@ -20,7 +20,8 @@ An isolated workspace manager for LaTeX projects.
 | `texi export <markdown\|html\|tex4ht\|latexml>` | Converts to `build/export/<format>/`: Markdown or HTML via pandoc (with citeproc and MathJax), HTML via TeX4ht (`make4ht`, needs `luaxml`) or LaTeXML (`latexmlc`). |
 | `texi fmt [files]` | Formats `.tex` files under `src_dir` with `tex-fmt`, using the settings in `[tex-fmt]`. `--check` only reports. |
 | `texi scan` | Lists the packages your sources use and their TeX Live packages. |
-| `texi tree` | Shows which files the last build actually read. |
+| `texi build-tree` | Shows which files the last build actually read. |
+| `texi tree` | Shows the packages installed in `.texenv/` as a dependency tree (`--depth`, `--explicit`, `--package`, `--invert`). |
 | `texi doctor` | Checks the TeX install and flags stale user-level formats. |
 | `texi formats` / `texi updmap` / `texi mktexlsr` / `texi luaotfload` | Rebuild formats, font maps, the `ls-R` filename databases (`--local` for `.texenv/` only) and the LuaTeX font database (`--force` for a full rebuild). |
 | `texi update` / `texi outdated` | Fetch the latest package index and update the packages in `.texenv/` (same as `texi sync`) / list what would be updated without installing. |
@@ -172,7 +173,7 @@ pdflatex = "pdflatex -shell-escape %O %S"
 | `preview_continuous_mode` | `false` | `-pvc`. Set by `texi preview`. |
 | `preview_mode` | `false` | `-p`, one-shot preview. Always off for texi commands. |
 | `sleep_time` | `2` | Seconds between file checks in continuous mode. |
-| `recorder` | `true` | Pass `-recorder` so the `.fls` file list is written (needed by `texi tree`). |
+| `recorder` | `true` | Pass `-recorder` so the `.fls` file list is written (needed by `texi build-tree`). |
 | `warnings_as_errors` | `false` | Treat warnings as errors. |
 | `optimize_pdf` | `false` | pdflatex only: inject `\pdfminorversion=5 \pdfcompresslevel=9 \pdfobjcompresslevel=3` to shrink the PDF. |
 

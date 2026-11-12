@@ -20,7 +20,7 @@ Convert the document into `build/export/<format>/`.
 | `tex4ht` | `make4ht` (needs `luaxml`) |
 | `latexml` | `latexmlc` (LaTeXML) |
 
-## `texi tree`
+## `texi build-tree`
 
 Show which files the last build actually read, as a directory tree. It relies on the `.fls` file written by `-recorder` (`build.recorder`, on by default).
 

@@ -119,7 +119,7 @@ pdflatex = "pdflatex -shell-escape %O %S"
 | `preview_continuous_mode` | `false` | `-pvc`. Set by `texi preview`. |
 | `preview_mode` | `false` | `-p`, one-shot preview. Always off for texi commands. |
 | `sleep_time` | `2` | Seconds between file checks in continuous mode. |
-| `recorder` | `true` | Pass `-recorder` so the `.fls` file list is written (needed by `texi tree`). |
+| `recorder` | `true` | Pass `-recorder` so the `.fls` file list is written (needed by `texi build-tree`). |
 | `warnings_as_errors` | `false` | Treat warnings as errors. |
 | `optimize_pdf` | `false` | pdflatex only: inject `\pdfminorversion=5 \pdfcompresslevel=9 \pdfobjcompresslevel=3` to shrink the PDF. |
 

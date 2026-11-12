@@ -29,7 +29,7 @@ from rich.markup import escape
 from rich.text import Text
 from rich.tree import Tree
 
-from texi import archive, logparse_bib, pdffonts, texenv, texfmt, tools
+from texi import archive, deptree, logparse_bib, pdffonts, texenv, texfmt, tools
 from texi import tlpdb as tlpdb_mod
 from texi.ctan import CtanClient
 from texi.logparse import (
@@ -2283,10 +2283,13 @@ def fix_pdf(
 
 
 @app.command(
+    name="build-tree",
     help="Show which files the last build actually read, as a directory tree.",
     rich_help_panel="Build",
 )
-def tree(project_dir: Path | None = None, fls_filename: str | None = None) -> None:
+def build_tree(
+    project_dir: Path | None = None, fls_filename: str | None = None
+) -> None:
     if project_dir is None:
         project_dir = Path.cwd()
     config = load_project_config(project_dir / "texproject.toml")
@@ -2572,6 +2575,93 @@ def update(debug: DebugOpt = False) -> None:
     _sync(config.dependencies, no_upgrade=False)
 
 
+@app.command(
+    help="Show the packages installed in .texenv/ and what depends on what, as a tree.",
+    rich_help_panel="Project",
+)
+def tree(
+    depth: Annotated[
+        int | None,
+        typer.Option("--depth", "-d", min=0, help="Show at most this many levels below each root."),
+    ] = None,
+    explicit: Annotated[
+        bool,
+        typer.Option(
+            "--explicit",
+            help="Only the dependencies in texproject.toml and what they depend on.",
+        ),
+    ] = False,
+    package: Annotated[
+        str | None,
+        typer.Option("--package", "-p", help="Show only this package and its dependencies."),
+    ] = None,
+    invert: Annotated[
+        bool,
+        typer.Option(
+            "--invert",
+            "-i",
+            help="With --package: show the packages that depend on it instead.",
+        ),
+    ] = False,
+    debug: DebugOpt = False,
+) -> None:
+    """List installed packages as a dependency tree."""
+    _intro("texi tree")
+    if invert and package is None:
+        console.print("[red]--invert needs --package.[/red]")
+        raise typer.Exit(code=1)
+    env_dir = Path.cwd() / ".texenv"
+    if not (env_dir / "tlpkg" / "texlive.tlpdb").is_file():
+        console.print("[red]No .texenv/ yet. Run `texi sync`.[/red]")
+        raise typer.Exit(code=1)
+    config = load_project_config(Path.cwd() / "texproject.toml")
+    g = deptree.read(env_dir, _target_arch(env_dir))
+    only: set[str] | None = None
+    if package is not None:
+        if package not in g.revisions:
+            console.print(f"[red]{escape(package)} is not installed in .texenv/.[/red]")
+            raise typer.Exit(code=1)
+        roots = [package]
+    elif explicit:
+        roots = sorted(d for d in config.dependencies if d in g.revisions)
+        for d in sorted(set(config.dependencies) - set(g.revisions)):
+            console.print(f"[yellow]{escape(d)} is in texproject.toml but not installed.[/yellow]")
+    else:
+        roots = g.roots()
+    if explicit and package is None:
+        only = deptree.closure(g, roots)
+    nodes = deptree.build(g, roots, depth=depth, invert=invert, only=only)
+
+    def label(n: deptree.Node) -> str:
+        text = f"{escape(n.name)} [dim]r{escape(n.revision)}[/dim]"
+        if n.seen:
+            text += " [dim](*)[/dim]"
+        elif n.cut:
+            text += " [dim]…[/dim]"
+        return text
+
+    def add(parent: Tree, n: deptree.Node) -> None:
+        branch = parent.add(label(n))
+        for c in n.children:
+            add(branch, c)
+
+    heading = {
+        (True, True): f"packages that depend on {package}",
+        (True, False): f"{package} and its dependencies",
+    }.get((package is not None, invert), "explicit dependencies" if explicit else "installed packages")
+    root_tree = Tree(f"[bold]{escape(heading)}[/bold]", guide_style="bright_blue")
+    for n in nodes:
+        add(root_tree, n)
+    console.print(root_tree)
+    if any(_has_seen(n) for n in nodes):
+        console.print("[dim](*) already shown above[/dim]")
+    outro(f"{len(g.revisions)} packages installed")
+
+
+def _has_seen(n: deptree.Node) -> bool:
+    return n.seen or any(_has_seen(c) for c in n.children)
+
+
 _ORDER = [
     "init",
     "add",
@@ -2586,6 +2676,7 @@ _ORDER = [
     "fmt",
     "export",
     "tree",
+    "build_tree",
     "doctor",
     "formats",
     "updmap",
