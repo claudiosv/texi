@@ -1,17 +1,17 @@
 # texi
 
-An isolated workspace manager for LaTeX projects, in the spirit of `uv` for Python.
+An isolated workspace & package manager for LaTeX projects, bringing isolated `.texenv` environments akin to Python's `.venv`. Texi is a replacement for `tlmgr` in the spirit of `uv` for Python.
 
-`texi` wraps `latexmk` and gives each LaTeX project its own standalone TeX Live tree (`.texenv/`), built from packages cloned out of a shared cache. One `texproject.toml` describes the project: its packages, engine and build options.
+Texi installs a minimal, standalone TeX Live tree for each LaTeX project, so no system TeX environment is needed. The tree is built from a shared cache, meaning that packages are downloaded once and reused across projects. It also wraps `latexmk` to provide consistent build and preview experiences, and formats/lints with `tex-fmt`. One `texproject.toml` describes the project: its package dependencies, engine and build options.
 
 ## Why texi
 
 - **Per-project packages.** Dependencies install into `.texenv/`, so one paper's package updates never break another, and the system TeX Live stays untouched.
 - **No tlmgr, no system TeX Live.** texi never calls `tlmgr`, never reads or writes the system TeX Live, and needs only `perl` from the system. It installs `.texenv/` itself from the CTAN `tlnet` containers; see [texi sync](commands/project.md#texi-sync).
-- **Shared cache, instant installs.** Packages are downloaded once into `~/.cache/texi/archive/<ID>/<package>/` and copy-on-write cloned into each project's `.texenv/` (like uv does for Python), so a second project that needs the same package installs in milliseconds and offline. Set `install_method = "tlmgr"` to use `tlmgr install` instead.
-- **Resolves package name mismatches.** The name TeX loads is a file name, which is not always the name of the package that ships it. For example, `binhex` is provided by the `kastrup` package, so `tlmgr install binhex` fails. texi first looks the name up in a local index of the TeX Live package database (the same data as `texi tlpdb`, cached in `~/.cache/texi/tlpdb/`; it is downloaded once and refreshed every 24 hours). Candidates are the packages that ship a run file `<name>.sty` or `<name>.cls` (`texi add` also accepts `.tex`), plus those whose `catalogue` field is the name, which is how `binhex` finds `kastrup`. Collections and schemes are ignored. A package called exactly the name wins, then one whose catalogue key is the name, then a single candidate; otherwise `texi add` asks you to pick one (showing each short description), and `texi init` and `texi scan` take the first. If the index is unavailable or knows nothing, texi runs `tlmgr search --file --global --word`; if that finds several packages, it asks the CTAN API (`ctan.org/json/3.0`) and reads the `texlive` field of the package record, and if tlmgr finds nothing the CTAN answer is used on its own. The raw name is kept if nobody knows it. Results are cached in `~/.cache/texi/`; a lookup that needed CTAN while offline is not cached.
+- **Shared cache, instant installs.** Packages are downloaded once (`~/.cache/texi/archive`) and copy-on-write cloned into each project's `.texenv/` (like uv does for Python), so a second project that needs the same package installs in milliseconds and offline.
+- **Resolves package name mismatches.** The name TeX loads in `\usepackage` directive is a file name, which is not always the name of the package that ships it. For example, `binhex` is provided by the `kastrup` package, so `tlmgr install binhex` fails. Texi first looks the name up in its local package index, if a package by that name doesn't exist, it falls back to the CTAN API or asks you to pick one (showing each short description).
 - **Reproducible.** `texi sync` writes `texi.lock` with the TeX Live year and the installed revision of every package. Commit it, and texi lists what changed when a later sync differs. Set `repository` to a frozen tlnet to pin versions for real.
-- **No hand-written `.latexmkrc`.** texi generates it from `texproject.toml` on every build: engine, output directories, `synctex`, bibliography paths and more.
+- **Everything in one `.toml` file.** All project configuration is in `texproject.toml`, including dependencies, build options, formatting,and more. That means no more hand-written `.latexmkrc` files, no separate `tex-fmt.toml`.
 - **Readable build output.** `texi build` parses latexmk's logs into a short list of errors, warnings and overfull boxes. `--raw` gives the full latexmk output.
 - **Live preview.** `texi preview` rebuilds on every change and reports diagnostics after each cycle.
 - **Venue checks.** After a build, texi warns about Type 3 fonts, which ACM rejects, and [`texi fix-pdf`](commands/fix-pdf.md) explains or repairs them.
@@ -22,7 +22,7 @@ An isolated workspace manager for LaTeX projects, in the spirit of `uv` for Pyth
 uv tool install texi-cli
 ```
 
-The `usermode` and `copy` modes need an existing system TeX Live. The `install` mode needs none: it downloads a fresh minimal tree into `.texenv/`. Run `texi doctor` to check your setup.
+Run `texi doctor` to check your setup.
 
 ## Quick start
 
@@ -34,7 +34,7 @@ texi sync      # install dependencies into .texenv/
 texi build     # compile
 ```
 
-`texi init` creates `texproject.toml` (`name` set to the directory name, `src_dir = "src"`) and seeds `dependencies` by scanning your `.tex` files for `\usepackage` and `\RequirePackage`. Add packages later with `texi add <pkg>`.
+`texi init` creates `texproject.toml` and seeds `dependencies` by scanning your `.tex` files for `\usepackage` and `\RequirePackage`. Add packages later with `texi add <pkg>`.
 
 ## Example `texproject.toml`
 
@@ -47,7 +47,7 @@ texlive = "2026"
 dependencies = ["acmart", "biblatex", "biber", "geometry", "microtype"]
 
 [build]
-pdf_mode = "lualatex"
+pdf_mode = "pdflatex"
 out_dir = "build"
 aux_dir = "build"
 synctex = true
@@ -64,7 +64,6 @@ Default layout (`src_dir = "src"`):
 ```
 texproject.toml
 texi.lock           # written by texi sync, commit it
-.latexmkrc          # generated, keep at the project root
 .texenv/            # local TeX tree
 build/              # PDF and aux files
 src/main.tex

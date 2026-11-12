@@ -38,11 +38,11 @@ Each package's runfiles container (`<repository>/archive/<name>.tar.xz`, verifie
 
 `<ID>` is `<name>-<revision>-<first 7 characters of the container checksum>`, for example `kastrup-15878-d7cbd22`, so a new revision gets a new directory. `XDG_CACHE_HOME` is honored. Files are then cloned (copy-on-write on APFS, btrfs and XFS; a plain copy elsewhere, never a hard link) into `.texenv/` (`tex/latex/newtx/newtx.sty`; in `copy`/`install` trees under `texmf-dist/`), and recorded in `.texenv/tlpkg/texlive.tlpdb` and `tlpkg/tlpobj/` so `tlmgr`, `texi.lock` and `texi info` keep working. Dependencies are resolved as described under [Dependency resolution](#dependency-resolution). With updates enabled, a package whose index revision is newer is reinstalled from a new store entry.
 
-texi never runs `tlmgr`. The user tree skeleton (`tlpkg/texlive.tlpdb`, `tlpkg/tlpobj/`, `web2c/`, `texmf-var/`, `texmf-config/`) is written by texi itself, packages the system tlpdb lists as installed are not copied, and `latexmk` is installed into `.texenv/` when no `latexmk` is on `PATH`. `.texenv/bin/<arch>` is put first on `PATH` for every process texi starts and in the generated latexmkrc. Deleting `~/.cache/texi/archive/` is safe; there is no cleanup command yet.
+texi never runs `tlmgr`. The user tree skeleton (`tlpkg/texlive.tlpdb`, `tlpkg/tlpobj/`, `web2c/`, `texmf-var/`, `texmf-config/`) is written by texi itself, packages the system tlpdb lists as installed are not copied, and `latexmk` is installed into `.texenv/` when no `latexmk` is on `PATH`. `.texenv/bin/<arch>` is put first on `PATH` for every process texi starts and in the generated `latexmkrc`. Deleting `~/.cache/texi/archive/` is safe.
 
 #### Install actions and binaries
 
-After a batch is cloned, texi performs the `execute` and `postaction` lines of the installed packages itself, following `tlmgr`, once per batch and never through `tlmgr`:
+After a package is cloned, texi performs the `execute` and `postaction` lines of the installed packages itself:
 
 - `addMap`, `addMixedMap`, `addKanjiMap`: texi writes `web2c/updmap.cfg` (standalone: `texmf-dist/web2c/updmap.cfg`) and runs `updmap-user` (standalone: `updmap-sys`) once.
 - `AddFormat`: texi writes `web2c/fmtutil.cnf` and builds the formats of the batch with `fmtutil-user --byfmt` (standalone: `fmtutil-sys`) once. Formats whose `fmttriggers` name a changed package are rebuilt, a failing build is a yellow warning.
@@ -51,15 +51,15 @@ After a batch is cloned, texi performs the `execute` and `postaction` lines of t
 
 Binary packages (`name.<arch>`) are cloned for the selected architecture only into `.texenv/bin/<arch>/`, with execute bits kept and symlinks relative. Uninstalling a package removes its map, format and hyphenation entries and binaries.
 
-A package that cannot be installed is never handed to `tlmgr`. An unknown root goes to the missing list, a failed download or checksum mismatch is reported in yellow and the package is listed as failed, and a package that is not relocatable is skipped in a user tree with the reason, as `tlmgr` does.
+An unknown package goes to the missing list, a failed download or checksum mismatch is reported in yellow and the package is listed as failed.
 
 #### Dependency resolution
 
-texi resolves the `depend` closure itself, like TeX Live's `expand_dependencies`, against one repository's package index. `name.ARCH` dependencies become `name.<arch>` for the tree's architecture (a standalone `.texenv/`'s `bin/<arch>`, otherwise the architecture derived from the platform, for example `universal-darwin` or `x86_64-linux`; archive mode never runs `tlmgr print-platform`); binary packages for other architectures and infrastructure packages are skipped. Collections and schemes are followed but not installed; a collection or scheme you list yourself is expanded, its member packages are installed, and the collection is recorded in `.texenv/` without files so `tlmgr` sees it as installed. Packages are installed in dependency order. Settings stored in `depend` lines of `00texlive.*` entries are never dependencies. A dependency the index does not know is reported in yellow with the packages that need it and does not stop the sync. With `--debug`, texi also prints the install order and why each transitive package was pulled in.
+texi resolves the `depend` closure itself, like TeX Live's `expand_dependencies`, against one repository's package index. `name.ARCH` dependencies become `name.<arch>` for the tree's architecture (a standalone `.texenv/`'s `bin/<arch>`, otherwise the architecture derived from the platform, for example `universal-darwin` or `x86_64-linux`); binary packages for other architectures and infrastructure packages are skipped. Collections and schemes are followed but not installed; a collection or scheme you list yourself is expanded, its member packages are installed, and the collection is recorded in `.texenv/` without files so `tlmgr` sees it as installed. A dependency the index does not know is reported in yellow with the packages that need it and does not stop the sync. With `--debug`, texi also prints the install order and why each transitive package was pulled in.
 
 ## `texi scan`
 
-List the packages your source files use and their TeX Live packages, and flag any missing from `texproject.toml`.
+List the packages your source files use and their TeX Live packages, based on the content of your **build logs**, and flag any missing from `texproject.toml`.
 
 | option | description |
 |---|---|
@@ -72,11 +72,8 @@ Show where texi keeps this project's local TeX tree and which tools it found.
 
 ## `texi outdated`
 
-Fetch the latest package index and list the packages in `.texenv/` (and `tex-fmt`) that have a newer revision, as `name rOLD → rNEW`. Nothing is downloaded or installed. Run `texi sync` (or `texi update`) to apply the updates.
+Fetch the latest package index and list the packages in `.texenv/` (and `tex-fmt`) that have a newer revision, as `name rOLD → rNEW`. Nothing is downloaded or installed. Run `texi sync` to apply the updates.
 
-## `texi update`
-
-The same as `texi sync`: fetch the latest index and update the packages of `.texenv/`. It never touches the system TeX Live.
 
 ## `texi tree`
 

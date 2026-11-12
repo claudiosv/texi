@@ -2656,19 +2656,6 @@ def outdated(debug: DebugOpt = False) -> None:
 
 
 @app.command(
-    help="Fetch the latest package index and update the packages in .texenv/ (same as `texi sync`).",
-    rich_help_panel="Project",
-)
-def update(debug: DebugOpt = False) -> None:
-    """Update the project's packages from the repository; never touches the system TeX Live."""
-    _intro("texi update")
-    config = load_project_config(Path.cwd() / "texproject.toml")
-    _apply_project(config)
-    _resolver_tlpdb(console, refresh=True)
-    _sync(config.dependencies, no_upgrade=False)
-
-
-@app.command(
     name="list",
     help="List the packages installed in .texenv/ with their revision, one per line.",
     rich_help_panel="Project",
