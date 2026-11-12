@@ -882,6 +882,12 @@ def run(
         ctx.warn(p)
     if batch.empty and not batch.changed:
         return ctx.out
+    if standalone and not (
+        ctx.root / "texmf-var" / "tex" / "generic" / "config" / "language.def"
+    ).is_file():
+        # hyphen-base ships a language.def that lists every language of TeX Live;
+        # until ours shadows it, formats fail on the patterns that are not installed
+        batch.hyphens = True
     executes = read_executes(ctx.tlpdb)
     language: list[Path] = []
     if batch.maps:

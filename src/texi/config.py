@@ -227,6 +227,11 @@ class ProjectConfig(BaseModel):
     # How packages get into .texenv/: "archive" = download each package once into
     # ~/.cache/texi/archive and clone it (copy-on-write) into the project, "tlmgr" = tlmgr install
     install_method: Literal["archive", "tlmgr"] = "archive"
+    # Check each downloaded package against the sha512 in the package index. A
+    # mismatch is retried (first from the index's own mirror, then via the
+    # redirector) and then refused. Set false to warn about a mismatch (a stale
+    # mirror, usually) and install the package anyway.
+    verify_checksums: bool = True
     # tlmgr repository to install from; point at a frozen tlnet to truly pin versions
     repository: str | None = None
     # Directory holding the .tex sources; "." = project root. latexmk runs with -cd.

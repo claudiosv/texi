@@ -157,8 +157,13 @@ def _download(
     client: httpx.Client | None,
     progress: Callable[[int, int], None] | None,
     size_hint: int,
-) -> None:
-    """Stream ``url`` to ``dest`` and verify its sha512; raises ArchiveError."""
+    verify: bool = True,
+) -> str:
+    """Stream ``url`` to ``dest`` and return its sha512.
+
+    Raises ArchiveError for a failed download, or for a sha512 other than
+    ``expected`` when ``verify`` is set. Without ``verify`` the caller compares.
+    """
     digest = hashlib.sha512()
     done = 0
     try:
@@ -196,15 +201,36 @@ def _download(
     except (httpx.HTTPError, OSError) as e:
         dest.unlink(missing_ok=True)
         raise ArchiveError(f"download of {url} failed: {e}") from e
-    if digest.hexdigest() != expected.lower():
+    if verify and digest.hexdigest() != expected.lower():
         dest.unlink(missing_ok=True)
         raise ArchiveError(f"sha512 mismatch for {url}")
+    return digest.hexdigest()
 
 
 #: Seconds to wait before each retry of a failed download (so ``len + 1`` attempts).
 #: mirror.ctan.org redirects to a different mirror per request, so a retry often
 #: succeeds after a mirror with a broken certificate, a stale file or a timeout.
 RETRY_DELAYS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0)
+
+
+def pinned_mirror(repository: str, index_source: str | None) -> str:
+    """The mirror the package index came from, or ``repository`` if that is unknown.
+
+    ``mirror.ctan.org`` sends each request to another mirror, and mirrors sync at
+    different times, so an index from one mirror and a container from another can
+    disagree on the sha512. Downloading from the index's own mirror avoids that.
+
+    Parameters
+    ----------
+    repository
+        The configured repository (possibly the ``mirror.ctan.org`` redirector).
+    index_source
+        Final URL the index was downloaded from, as in :attr:`texi.tlpdb.Tlpdb.source`.
+    """
+    tail = "/tlpkg/texlive.tlpdb.xz"
+    if index_source and index_source.startswith("http") and index_source.endswith(tail):
+        return index_source[: -len(tail)]
+    return repository
 
 
 def fetch(
@@ -214,6 +240,8 @@ def fetch(
     client: httpx.Client | None = None,
     progress: Progress | None = None,
     notice: Callable[[str], None] | None = None,
+    verify: bool = True,
+    mirror: str | None = None,
 ) -> tuple[Entry, bool]:
     """Make sure ``pkg`` is in the store, downloading it if needed.
 
@@ -230,6 +258,15 @@ def fetch(
     notice
         Called with a message before each retry. A failed download is retried
         after :data:`RETRY_DELAYS`; when the last attempt fails too, the error is raised.
+    mirror
+        Concrete mirror of the index (see :func:`pinned_mirror`). The first
+        attempt uses it; later attempts go through ``repository`` so another
+        mirror may answer.
+    verify
+        Refuse a download whose sha512 differs from the index. Without it a
+        mismatch is only reported to ``notice`` (usually a stale mirror) and the
+        package is kept in the store under the sha512 it really has, so the
+        wrong file never takes the place of the indexed build.
 
     Returns
     -------
@@ -259,21 +296,35 @@ def fetch(
     staging = Path(tempfile.mkdtemp(prefix=".tmp-", dir=store))
     try:
         size = int(pkg.first("containersize") or 0)
-        url = f"{repository.rstrip('/')}/archive/{pkg.name}.tar.xz"
+        def url_for(attempt: int) -> str:
+            base = mirror if mirror and attempt == 0 else repository
+            return f"{base.rstrip('/')}/archive/{pkg.name}.tar.xz"
+
+        actual = checksum
         for attempt in range(len(RETRY_DELAYS) + 1):
             try:
-                _download(
-                    url,
+                actual = _download(
+                    url_for(attempt),
                     part,
                     checksum,
                     client,
                     (lambda d, t: progress(label, d, t)) if progress else None,
                     size,
+                    verify,
                 )
                 break
             except ArchiveError as e:
                 if attempt == len(RETRY_DELAYS):
-                    raise ArchiveError(f"{e} (gave up after {attempt + 1} attempts)") from e
+                    hint = (
+                        "; the mirrors look out of date. Pin one with "
+                        'repository = "https://<mirror>/CTAN/systems/texlive/tlnet" '
+                        "in texproject.toml, or set verify_checksums = false"
+                        if "sha512 mismatch" in str(e)
+                        else ""
+                    )
+                    raise ArchiveError(
+                        f"{e} (gave up after {attempt + 1} attempts{hint})"
+                    ) from e
                 delay = RETRY_DELAYS[attempt]
                 if notice:
                     notice(
@@ -281,6 +332,18 @@ def fetch(
                         f"(attempt {attempt + 2} of {len(RETRY_DELAYS) + 1})"
                     )
                 time.sleep(delay)
+        if actual.lower() != checksum.lower():
+            if notice:
+                notice(
+                    f"{pkg.name}: package hash mismatched (expected {checksum[:7]}, got "
+                    f"{actual[:7]}), likely a stale mirror; installing it anyway"
+                )
+            checksum = actual  # what the store entry and its metadata describe
+            ident = archive_id(pkg.name, pkg.revision, actual)
+            final = store / ident
+            if (hit := _read_entry(final, pkg.name)) is not None:
+                return hit, False
+            shutil.rmtree(final, ignore_errors=True)
         target = staging / pkg.name
         target.mkdir()
         try:
@@ -880,6 +943,7 @@ def install_packages(
     update: bool = True,
     arch: str | None = None,
     infrastructure: bool = False,
+    verify: bool = True,
     client: httpx.Client | None = None,
     progress: Progress | None = None,
     log: Callable[[str], None] | None = None,
@@ -925,6 +989,8 @@ def install_packages(
         Target architecture for ``name.ARCH`` dependencies; None skips them.
     infrastructure
         Also install infrastructure packages (``texlive.infra``, ...).
+    verify
+        Refuse packages whose sha512 differs from the index (see :func:`fetch`).
     client
         httpx client for downloads.
     progress
@@ -936,6 +1002,9 @@ def install_packages(
     """
     say = log or (lambda _m: None)
     warn = notice or (lambda _m: None)
+    mirror = pinned_mirror(repository, getattr(db, "source", None))
+    if mirror != repository:
+        say(f"downloading from {mirror} (the mirror of the package index)")
     pl = plan(
         db,
         roots,
@@ -989,7 +1058,13 @@ def install_packages(
             fresh = False
             if entry is None:
                 entry, fresh = fetch(
-                    repository, pkg, client=client, progress=progress, notice=warn
+                    repository,
+                    pkg,
+                    client=client,
+                    progress=progress,
+                    notice=warn,
+                    verify=verify,
+                    mirror=mirror,
                 )
             tree.install(pkg, entry)
         except (ArchiveError, OSError) as e:

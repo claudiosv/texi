@@ -1555,6 +1555,7 @@ def _archive_install(
     infrastructure: bool = False,
 ) -> archive.Result:
     """Install `roots` into .texenv/ from the archive store (never tlmgr)."""
+    project = _peek_project()
     db = _resolver_tlpdb(console)
     if db is None:
         console.print(
@@ -1587,6 +1588,7 @@ def _archive_install(
         update=update,
         arch=_target_arch(env_dir),
         infrastructure=infrastructure or standalone,
+        verify=bool(project and project.verify_checksums),
         progress=progress,
         log=log,
         notice=lambda m: console.print(f"[yellow]{escape(m)}[/yellow]"),

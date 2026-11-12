@@ -553,3 +553,86 @@ def test_download_gives_up_and_install_is_not_done(tmp_path: Path) -> None:
     assert res.failed == ["bar"]
     assert calls["n"] == len(archive.RETRY_DELAYS) + 1
     assert not any(total and done == total for _l, done, total in labels)
+
+
+def _stale_client() -> httpx.Client:
+    """A mirror that serves a valid but older build of bar (a different sha512)."""
+    old = _container({"tex/latex/bar/bar.sty": "% old bar\n"}, "bar")
+    return httpx.Client(
+        transport=httpx.MockTransport(lambda req: httpx.Response(200, content=old))
+    )
+
+
+def test_hash_mismatch_installs_with_warning_when_not_verifying(
+    tmp_path: Path, store: Path
+) -> None:
+    db = tlpdb.parse_tlpdb(_db_text())
+    env = new_env(tmp_path)
+    notes: list[str] = []
+    res = run(
+        db, env, roots=["bar"], client=_stale_client(), notice=notes.append, verify=False
+    )
+    assert res.installed == ["bar"] and res.failed == []
+    assert (env / "tex/latex/bar/bar.sty").read_text() == "% old bar\n"
+    assert any("hash mismatched" in n and "stale mirror" in n for n in notes)
+    # stored under the sha512 it really has, never as the indexed build
+    expected = archive.archive_id(
+        "bar", "5", tlpdb.parse_tlpdb(_db_text()).get("bar").first("containerchecksum")
+    )
+    assert expected not in [p.name for p in store.iterdir()]
+
+
+def test_hash_mismatch_fails_when_verifying(tmp_path: Path, store: Path) -> None:
+    res = run(
+        tlpdb.parse_tlpdb(_db_text()),
+        new_env(tmp_path),
+        roots=["bar"],
+        client=_stale_client(),
+        verify=True,
+    )
+    assert res.failed == ["bar"] and list(store.iterdir()) == []
+
+
+def test_verify_checksums_defaults_to_on() -> None:
+    from texi.config import ProjectConfig
+
+    assert ProjectConfig().verify_checksums is True
+
+
+def test_pinned_mirror_from_index_source() -> None:
+    redirector = "https://mirror.ctan.org/systems/texlive/tlnet"
+    src = "https://mirrors.rit.edu/CTAN/systems/texlive/tlnet/tlpkg/texlive.tlpdb.xz"
+    assert archive.pinned_mirror(redirector, src) == (
+        "https://mirrors.rit.edu/CTAN/systems/texlive/tlnet"
+    )
+    assert archive.pinned_mirror(redirector, None) == redirector
+    assert archive.pinned_mirror(redirector, "file:///x/texlive.tlpdb.xz") == redirector
+
+
+def test_first_download_uses_the_index_mirror_then_the_redirector() -> None:
+    db = tlpdb.parse_tlpdb(_db_text())
+    seen: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req.url.host)
+        if req.url.host == "pinned.example":
+            return httpx.Response(200, content=b"stale")  # fails the sha512
+        return httpx.Response(200, content=BLOBS["bar"])
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    notes: list[str] = []
+    entry, fresh = archive.fetch(
+        REPO,
+        db.get("bar"),
+        client=client,
+        notice=notes.append,
+        mirror="https://pinned.example/tlnet",
+    )
+    assert fresh and seen == ["pinned.example", "repo.example"]
+    assert "retrying" in notes[0]
+
+
+def test_giving_up_on_a_mismatch_suggests_pinning() -> None:
+    db = tlpdb.parse_tlpdb(_db_text())
+    with pytest.raises(archive.ArchiveError, match="Pin one with"):
+        archive.fetch(REPO, db.get("bar"), client=make_client(corrupt=True))
