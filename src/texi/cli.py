@@ -30,7 +30,7 @@ from rich.markup import escape
 from rich.text import Text
 from rich.tree import Tree
 
-from texi import archive, deptree, latexmk_files, logparse_bib, lsr, pdffonts, texenv, texfmt, tools, unused as unused_mod
+from texi import archive, deptree, latexmk_files, logparse_bib, lsr, pdffonts, runaway, texenv, texfmt, tools, unused as unused_mod
 from texi import tlpdb as tlpdb_mod
 from texi.ctan import CtanClient
 from texi.logparse import (
@@ -1451,7 +1451,33 @@ def _collect_diagnostics(config: TexProjectConfig, since: float) -> list[Diagnos
             if path.is_file() and path.stat().st_mtime >= since - 2:
                 diags += parse(path.read_text(encoding="utf-8", errors="replace"))
         _resolve_biber_temp_files(diags, config, aux / f"{name}.bcf")
+    _explain_runaways(diags, config)
     return diags
+
+
+def _explain_runaways(diags: list[Diagnostic], config: TexProjectConfig) -> None:
+    """For "File ended while scanning use of \\x": point at where the argument starts."""
+    todo = [
+        d
+        for d in diags
+        if d.kind == "error"
+        and d.code in ("file-ended", "paragraph-ended")
+        and runaway.runaway_text(d.stack)
+    ]
+    if not todo:
+        return
+    cwd = Path.cwd()
+    sources = {
+        str(f): f.read_text(encoding="utf-8", errors="replace")
+        for f in _source_files(cwd)
+    }
+    for d in todo:
+        found = runaway.locate(
+            runaway.runaway_text(d.stack) or "", runaway.macro_of(d.message), sources
+        )
+        if found:
+            d.file, d.line = found.file, found.line
+            d.hint = found.hint()
 
 
 def _find_project_file(name: str, config: TexProjectConfig) -> Path | None:
