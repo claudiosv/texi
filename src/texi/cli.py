@@ -1602,8 +1602,6 @@ def _location(d: Diagnostic, config: TexProjectConfig) -> str:
         if not rel.parts or rel.parts[0] != "..":  # inside the project
             path = rel
     loc = os.path.normpath(path)
-    if not Path(loc).is_absolute() and not loc.startswith(".."):
-        loc = f"./{loc}"  # terminals detect a path more reliably with the ./
     if not d.line:
         return loc
     lines = f"{d.line}-{d.end_line}" if d.end_line else str(d.line)
