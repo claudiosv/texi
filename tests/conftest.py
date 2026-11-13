@@ -32,6 +32,22 @@ def pytest_collection_modifyitems(
 
 
 @pytest.fixture(autouse=True)
+def _restore_environ(monkeypatch: pytest.MonkeyPatch):
+    """CLI commands activate .texenv/ by editing os.environ and cli.latexmk_path.
+
+    That is right for one command per process, but tests run commands in-process:
+    without this, PATH/PERL5LIB/TEXMF* point the next test at a deleted tmp tree.
+    """
+    from texi import cli
+
+    saved = os.environ.copy()
+    monkeypatch.setattr(cli, "latexmk_path", cli.latexmk_path)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
+
+
+@pytest.fixture(autouse=True)
 def _reset_tlmgr_guard():
     """The tlmgr ban is per command; don't let one test's setting leak into the next."""
     from texi import tlpdb

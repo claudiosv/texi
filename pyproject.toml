@@ -8,9 +8,9 @@ license-files = ["LICENSE"]
 authors = [{ name = "Claudio Spiess", email = "claudiovspiess@gmail.com" }]
 requires-python = ">=3.14"
 dependencies = [
-    "typer>=0.26",
-    "rich>=15",
-    "pydantic>=2.13.4",
+    "typer>=0.29.0",
+    "rich>=15.0.0",
+    "pydantic>=2.14.3",
     "inflect>=7.5.0",
     "sh>=2.4.0",
     "pyclack-cli",
@@ -51,8 +51,11 @@ requires = ["uv_build>=0.11.26,<0.12"]
 [dependency-groups]
 dev = [
     "pytest>=9.2.0",
-    "ruff>=0.15.20",
-    "ty>=0.0.55",
+    "pytest-cov>=7.1.0",
+    "pytest-randomly>=5.1.0",
+    "pytest-timeout>=2.4.0",
+    "ruff>=0.17.4",
+    "ty>=0.0.100",
 ]
 docs = [
     "mkdocs>=1.6.1",
@@ -67,3 +70,15 @@ docs = [
 
 [tool.pytest.ini_options]
 markers = ["network: hits the live CTAN API; skipped unless --network or TEXI_NETWORK=1"]
+timeout = 60
+
+[tool.coverage.run]
+source = ["texi"]
+branch = true
+
+[tool.coverage.report]
+skip_covered = true
+show_missing = true
+
+[tool.coverage.html]
+directory = "htmlcov"
