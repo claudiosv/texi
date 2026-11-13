@@ -205,7 +205,8 @@ def stats(
     debug: DebugOpt = False,
 ) -> None:
     """Show where the database comes from, its size and what it contains."""
-    _print_stats(_load(repository, local, refresh))
+    with _load(repository, local, refresh) as db:
+        _print_stats(db)
 
 
 def _highlight(value: str, pats: list[re.Pattern[str]], style: str = "") -> Text:
@@ -242,11 +243,11 @@ def search(
 ) -> None:
     """Search package names, descriptions and (with --file) file names."""
     q = query[0] if regex and len(query) == 1 else " ".join(query)
-    db = _load(repository, local, refresh)
-    try:
-        hits = db.search(q, regex=regex, in_files=file, category=category)
-    except tl.TlpdbError as e:
-        raise _fail(str(e)) from e
+    with _load(repository, local, refresh) as db:
+        try:
+            hits = db.search(q, regex=regex, in_files=file, category=category)
+        except tl.TlpdbError as e:
+            raise _fail(str(e)) from e
     if exact:
         ql = q.lower()
         hits = [
@@ -466,17 +467,17 @@ def info(
     debug: DebugOpt = False,
 ) -> None:
     """Show everything the database knows about a package."""
-    db = _load(repository, local, refresh, quiet=as_json)
-    pkgs = _lookup(db, name)
-    if as_json:
-        data = [p.to_dict() for p in pkgs]
-        typer.echo(json.dumps(data[0] if len(data) == 1 else data, indent=2))
-        return
-    if len(pkgs) > 1:
-        console.print(
-            f"[dim]'{escape(name)}' is the CTAN key of {len(pkgs)} packages.[/dim]"
-        )
-    for i, p in enumerate(pkgs):
-        if i:
-            console.print("\n" + "-" * 40 + "\n")
-        _print_info(db, p, show_files=files, all_files=all_files)
+    with _load(repository, local, refresh, quiet=as_json) as db:
+        pkgs = _lookup(db, name)
+        if as_json:
+            data = [p.to_dict() for p in pkgs]
+            typer.echo(json.dumps(data[0] if len(data) == 1 else data, indent=2))
+            return
+        if len(pkgs) > 1:
+            console.print(
+                f"[dim]'{escape(name)}' is the CTAN key of {len(pkgs)} packages.[/dim]"
+            )
+        for i, p in enumerate(pkgs):
+            if i:
+                console.print("\n" + "-" * 40 + "\n")
+            _print_info(db, p, show_files=files, all_files=all_files)

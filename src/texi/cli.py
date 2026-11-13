@@ -542,6 +542,9 @@ def _resolver_tlpdb(console: Console, refresh: bool = False) -> tlpdb_mod.Tlpdb 
     except (tlpdb_mod.TlpdbError, OSError, sqlite3.Error) as e:
         if DEBUG:
             console.print(f"[dim]tlpdb index unavailable: {escape(str(e))}[/dim]")
+    old = _tlpdb_memo
+    if isinstance(old, tlpdb_mod.Tlpdb) and old is not db:
+        old.close()  # a refresh replaced it; the memo is its only owner
     _tlpdb_memo = db
     return db
 
@@ -2695,11 +2698,11 @@ def info(
     if package is not None:
         from texi import tlpdb_cli  # ruff: ignore[import-outside-top-level]
 
-        db = tlpdb_cli._load(repository, local, refresh)
-        for i, p in enumerate(tlpdb_cli._lookup(db, package)):
-            if i:
-                console.print("\n" + "-" * 40 + "\n")
-            tlpdb_cli.print_summary(p)
+        with tlpdb_cli._load(repository, local, refresh) as db:
+            for i, p in enumerate(tlpdb_cli._lookup(db, package)):
+                if i:
+                    console.print("\n" + "-" * 40 + "\n")
+                tlpdb_cli.print_summary(p)
         return
     cwd = Path.cwd()
     env_dir = cwd / ".texenv"
