@@ -332,9 +332,19 @@ _CONTAINER = (
 )
 
 
-def _print_info(
-    db: tl.Tlpdb, p: tl.TlPackage, *, show_files: bool, all_files: bool
-) -> None:
+def print_summary(p: tl.TlPackage) -> set[str]:
+    """Print the basic facts of a package: header, descriptions, catalogue data.
+
+    Parameters
+    ----------
+    p
+        The package to describe.
+
+    Returns
+    -------
+    set[str]
+        The field names already shown, so a caller can list the remaining ones.
+    """
     relocatable = bool(p.first("relocated"))
     console.print(
         Text.assemble(
@@ -362,6 +372,13 @@ def _print_info(
             value += f"  (https://ctan.org/tex-archive{p.fields[k][0]})"
         rows.append((label, value))
     _kv(rows)
+    return used
+
+
+def _print_info(
+    db: tl.Tlpdb, p: tl.TlPackage, *, show_files: bool, all_files: bool
+) -> None:
+    used = print_summary(p)
     console.print()
     if p.depends:
         console.print(f"[bold]Depends[/bold] ({len(p.depends)})")

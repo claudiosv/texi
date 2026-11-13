@@ -26,6 +26,7 @@ from pyclack.utils.styling import S_BAR_START, Color
 from pydantic import ValidationError
 from rich.filesize import decimal
 from rich.markup import escape
+from rich.table import Table
 from rich.text import Text
 from rich.tree import Tree
 
@@ -78,7 +79,7 @@ app = typer.Typer(
     ),
     rich_markup_mode="rich",
     no_args_is_help=True,
-    add_completion=False,
+    add_completion=True,
 )
 DEBUG = False
 
@@ -1465,6 +1466,50 @@ def add(
 
 
 @app.command(
+    name="search",
+    help="Show which TeX Live package `texi add` would pick for each name (a package name, or a file like binhex), without installing.",
+    rich_help_panel="Project",
+)
+def search_packages(
+    names: Annotated[
+        list[str], typer.Argument(help="Package or file names, e.g. acmart or binhex.")
+    ],
+    debug: DebugOpt = False,
+) -> None:
+    """Resolve names exactly as `texi add` does, and list the result. Exits 1 if any name has no match."""
+    lookup = _lookup_packages(list(dict.fromkeys(names)))
+    packages = list(
+        dict.fromkeys(p for n, c in lookup.items() for p in ([n] if c is None else c))
+    )
+    descriptions = _short_descriptions(packages)
+    table = Table(show_lines=False)
+    table.add_column("name", no_wrap=True)
+    table.add_column("package", no_wrap=True)
+    table.add_column("description", overflow="fold")
+    missing = False
+    for name, candidates in lookup.items():
+        if candidates is None:
+            table.add_row(
+                escape(name),
+                f"[bold]{escape(name)}[/bold]",
+                escape(descriptions.get(name, "")),
+            )
+        elif not candidates:
+            missing = True
+            table.add_row(escape(name), "[red]no match[/red]", "")
+        else:
+            for pkg in candidates:
+                table.add_row(
+                    escape(name),
+                    f"[bold]{escape(pkg)}[/bold]",
+                    escape(descriptions.get(pkg, "")),
+                )
+    console.print(table)
+    if missing:
+        raise typer.Exit(code=1)
+
+
+@app.command(
     help="Install packages into .texenv/ without adding them to texproject.toml. File names like binhex are resolved to their package.",
     rich_help_panel="Project",
 )
@@ -1861,6 +1906,12 @@ def _run_latexmk(
         rc_arg = "/dev/stdin"
         if not execution.silent:
             console.print("[dim]Piping generated latexmkrc to latexmk[/dim]")
+    if DEBUG:
+        console.print("[dim]--- generated latexmkrc ---[/dim]")
+        console.print(
+            rc_text.rstrip("\n"), markup=False, highlight=False, soft_wrap=True
+        )
+        console.print("[dim]--- end latexmkrc ---[/dim]")
 
     if MAX_PRINT_LINE > BIBTEX_LINE_LIMIT and config.build.bibtex_use != "never":
         console.print(
@@ -2605,11 +2656,35 @@ def build_tree(
 
 
 @app.command(
-    help="Show where texi keeps this project's local TeX tree and which tools it found.",
+    help="Show a package's basic info (description, catalogue, CTAN path, license), or without a name where texi keeps this project's local TeX tree.",
     rich_help_panel="Project",
 )
-def info():
-    """Displays information about the current texi environment."""
+def info(
+    package: Annotated[
+        str | None,
+        typer.Argument(help="TeX Live package name or CTAN key; omit for the project."),
+    ] = None,
+    repository: Annotated[
+        str | None, typer.Option("--repository", help="TeX Live repository (tlnet).")
+    ] = None,
+    local: Annotated[
+        Path | None, typer.Option("--local", help="Use this tlpdb file.")
+    ] = None,
+    refresh: Annotated[
+        bool, typer.Option("--refresh", help="Ignore the cache age, check the server.")
+    ] = False,
+    debug: DebugOpt = False,
+) -> None:
+    """Basic package info, or the current texi environment without a name."""
+    if package is not None:
+        from texi import tlpdb_cli  # ruff: ignore[import-outside-top-level]
+
+        db = tlpdb_cli._load(repository, local, refresh)
+        for i, p in enumerate(tlpdb_cli._lookup(db, package)):
+            if i:
+                console.print("\n" + "-" * 40 + "\n")
+            tlpdb_cli.print_summary(p)
+        return
     cwd = Path.cwd()
     env_dir = cwd / ".texenv"
     tlpdb_path = env_dir / "tlpkg" / "texlive.tlpdb"
@@ -2820,13 +2895,21 @@ def outdated(debug: DebugOpt = False) -> None:
 
 @app.command(
     name="list",
-    help="List the packages installed in .texenv/ with their revision, one per line.",
+    help="List the packages installed in .texenv/ with their revision, one per line (-d adds the caption).",
     rich_help_panel="Project",
 )
 def list_packages(
     explicit: Annotated[
         bool,
         typer.Option("--explicit", help="Only the dependencies in texproject.toml."),
+    ] = False,
+    descriptions: Annotated[
+        bool,
+        typer.Option(
+            "--descriptions",
+            "-d",
+            help="Show each package's short description (caption).",
+        ),
     ] = False,
     debug: DebugOpt = False,
 ) -> None:
@@ -2841,8 +2924,12 @@ def list_packages(
         wanted = set(load_project_config(Path.cwd() / "texproject.toml").dependencies)
         names = [n for n in names if n in wanted]
     width = max((len(n) for n in names), default=0)
+    rev_width = max((len(g.revisions[n]) for n in names), default=0)
     for n in names:
-        typer.echo(f"{n:<{width}}  r{g.revisions[n]}")
+        line = f"{n:<{width}}  r{g.revisions[n]:<{rev_width}}"
+        if descriptions and (caption := g.captions.get(n)):
+            line += f"  {caption}"
+        typer.echo(line.rstrip())
 
 
 @app.command(

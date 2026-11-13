@@ -31,6 +31,8 @@ uv tool install texi-cli
 
 Run `texi doctor` to check your setup.
 
+To enable shell completion, run `texi --install-completion` and restart your shell. `texi --show-completion` prints the script instead.
+
 ## Quick start
 
 From a directory containing your `.tex` files:

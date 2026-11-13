@@ -12,3 +12,6 @@ wheels/
 example
 site/
 example_other/
+
+# mkdocs plugin cache
+.cache/

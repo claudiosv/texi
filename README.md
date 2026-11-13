@@ -12,6 +12,7 @@ An isolated workspace manager for LaTeX projects.
 |---|---|
 | `texi init` | Creates `texproject.toml` (`[project]` with `name` = directory name, `src_dir = "src"`), seeding `dependencies` by scanning `.tex` files for `\usepackage`/`\RequirePackage`. |
 | `texi add <pkg>...` | Adds packages to `dependencies` and installs them. A name that isn't a TeX Live package (e.g. `binhex`) is resolved to the package that ships it (`kastrup`), asking you to confirm or choose. `--sync` runs a full sync afterwards. |
+| `texi search <name>...` | Shows which TeX Live package `texi add` would pick for each name (a package, or a file like `binhex` → `kastrup`) with its description, without installing. Exits 1 if a name has no match. |
 | `texi install <pkg>...` | Like `texi add`, but installs into `.texenv/` without adding the packages to `dependencies`. |
 | `texi sync` | Installs all `dependencies` into `.texenv/`, then updates them (`--no-update` to skip), and records the installed revisions in `texi.lock`. |
 | `texi build` | Generates `.latexmkrc` from the config and runs `latexmk`. `--strict` stops at the first error, `--full` forces a full rebuild (`go_mode = "full-rebuild"`), `--rm-pdf` deletes the old PDF first, `--silent` cuts the output down to errors and the final status, `--diagnostics` shows latexmk's internal decisions, `--raw` prints latexmk's full output. |
@@ -24,8 +25,9 @@ An isolated workspace manager for LaTeX projects.
 | `texi build-tree` | Shows which files the last build actually read. |
 | `texi unused` | Lists `texproject.toml` packages the last build and your sources do not use. |
 | `texi activate` | Prints shell code that puts `.texenv/` first: `eval "$(texi activate)"` (`--off` undoes it). |
-| `texi list` | Lists the packages installed in `.texenv/` with their revision. |
+| `texi list` | Lists the packages installed in `.texenv/` with their revision (`-d` adds the caption). |
 | `texi tree` | Shows the packages installed in `.texenv/` as a dependency tree (`--depth`, `--explicit`, `--package`, `--invert`). |
+| `texi info [NAME]` | Shows the basics of a TeX Live package (description, catalogue, CTAN path, license, topics, version) without the file lists. Without a name it shows where `.texenv/` lives and which tools were found. |
 | `texi doctor` | Checks the TeX install and flags stale user-level formats. |
 | `texi formats` / `texi updmap` / `texi mktexlsr` / `texi luaotfload` | Rebuild formats, font maps, the `ls-R` filename databases (texi's own implementation, for `.texenv/`) and the LuaTeX font database (`--force` for a full rebuild). |
 | `texi outdated` | Fetch the latest package index and list what `texi sync` would update, without installing. |
@@ -38,6 +40,14 @@ All commands accept `--debug` where it makes sense.
 ```bash
 uv tool install texi-cli
 ```
+
+### Shell completion
+
+```bash
+texi --install-completion
+```
+
+Restart your shell afterwards. Use `texi --show-completion` to print the script instead of installing it.
 
 ## Quick start
 

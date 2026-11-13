@@ -42,6 +42,8 @@ Each package's runfiles container (`<repository>/archive/<name>.tar.xz`, verifie
 
 `<ID>` is `<name>-<revision>-<first 7 characters of the container checksum>`, for example `kastrup-15878-d7cbd22`, so a new revision gets a new directory. `XDG_CACHE_HOME` is honored. Files are then cloned (copy-on-write on APFS, btrfs and XFS; a plain copy elsewhere, never a hard link) into `.texenv/` (`tex/latex/newtx/newtx.sty`; in `copy`/`install` trees under `texmf-dist/`), and recorded in `.texenv/tlpkg/texlive.tlpdb` and `tlpkg/tlpobj/` so `tlmgr`, `texi.lock` and `texi info` keep working. Dependencies are resolved as described under [Dependency resolution](#dependency-resolution). With updates enabled, a package whose index revision is newer is reinstalled from a new store entry.
 
+Only run files are installed. Documentation (`docfiles`) and source (`srcfiles`) containers are never downloaded, so `.texenv/` has no package manuals; read them on CTAN (`texi info NAME` prints the CTAN path) or with `texdoc` from a full TeX Live.
+
 texi never runs `tlmgr`. The user tree skeleton (`tlpkg/texlive.tlpdb`, `tlpkg/tlpobj/`, `web2c/`, `texmf-var/`, `texmf-config/`) is written by texi itself, packages the system tlpdb lists as installed are not copied, and `latexmk` is installed into `.texenv/` when no `latexmk` is on `PATH`. `.texenv/bin/<arch>` is put first on `PATH` for every process texi starts and in the generated `latexmkrc`. Deleting `~/.cache/texi/archive/` is safe.
 
 #### Install actions and binaries
@@ -73,6 +75,8 @@ List the packages your source files use and their TeX Live packages, and flag an
 ## `texi info`
 
 Show where texi keeps this project's local TeX tree and which tools it found.
+
+`texi info NAME` shows the basics of a TeX Live package instead (NAME may also be a CTAN key): name, category, revision, short and long description, catalogue entry, CTAN path, license, topics and version. File lists, dependencies and containers are left out; `texi cache info NAME` prints those. It reads the package index like `texi cache` does and accepts `--repository`, `--local` and `--refresh`.
 
 ## `texi outdated`
 
@@ -129,6 +133,10 @@ The result has three parts:
 
 A package whose file is shadowed by a copy in your project (for example `acmart.cls` in the project directory) is reported unused, because the build reads your copy. Nothing is removed for you.
 
+## `texi search`
+
+Show which TeX Live package `texi add` would pick for each name, without installing anything: `texi search NAME...`. A name that is a package maps to itself. Otherwise texi looks for the packages that ship a file of that name (`.sty`, `.cls` or `.tex`) or have it as their CTAN key, so `binhex` gives `kastrup`. Every candidate is listed with its description; nothing is asked. Exits 1 if any name has no match. For free-text search use `texi cache search`.
+
 ## `texi list`
 
 List the packages installed in `.texenv/` with their revision, one `name  rREVISION` per line, sorted by name. There is no banner, so the output can be piped. Binary halves (`name.<arch>`) are left out.
@@ -136,5 +144,6 @@ List the packages installed in `.texenv/` with their revision, one `name  rREVIS
 | option | description |
 |---|---|
 | `--explicit` | Only the dependencies in `texproject.toml`. |
+| `-d`, `--descriptions` | Append each package's short description (the tlpdb `shortdesc` caption): `name  rREVISION  caption`. Packages without one show no caption. |
 
 `texi tree --depth 0` is not the same list: it shows only the packages that nothing else depends on.

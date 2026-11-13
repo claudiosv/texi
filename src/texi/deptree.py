@@ -17,6 +17,8 @@ class Graph:
 
     #: ``name -> revision`` of every installed package, binary variants excluded.
     revisions: dict[str, str] = field(default_factory=dict)
+    #: ``name -> shortdesc`` (the one-line caption) of every installed package that has one.
+    captions: dict[str, str] = field(default_factory=dict)
     #: ``name -> names it depends on`` (installed ones, sorted).
     deps: dict[str, list[str]] = field(default_factory=dict)
     #: ``name -> names that depend on it`` (installed ones, sorted).
@@ -51,13 +53,15 @@ def read(env_dir: Path, arch: str | None = None) -> Graph:
     g = Graph()
     raw: dict[str, list[str]] = {}
     for stanza in re.split(r"\n\s*\n", text):
-        name = rev = None
+        name = rev = caption = None
         deps: list[str] = []
         for line in stanza.splitlines():
             if line.startswith("name "):
                 name = line[5:].strip()
             elif line.startswith("revision "):
                 rev = line[9:].strip()
+            elif line.startswith("shortdesc "):
+                caption = line[10:].strip()
             elif line.startswith("depend ") and name is not None:
                 value = line[7:].strip()
                 if not resolver.is_pseudo_record(name, value):
@@ -67,6 +71,8 @@ def read(env_dir: Path, arch: str | None = None) -> Graph:
         if suffix and name.endswith(suffix):
             continue
         g.revisions[name] = rev or "?"
+        if caption:
+            g.captions[name] = caption
         raw[name] = deps
     for name, deps in raw.items():
         kept = sorted(
