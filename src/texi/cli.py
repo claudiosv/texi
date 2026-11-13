@@ -40,6 +40,7 @@ from texi import (
     runaway,
     texenv,
     texfmt,
+    texscan,
     tools,
 )
 from texi import tlpdb as tlpdb_mod
@@ -680,10 +681,6 @@ def find_bundle_for_sty(
     return bundles
 
 
-_TEX_PACKAGE_RE = re.compile(
-    r"\\(?:usepackage|RequirePackage|documentclass|LoadClass)(?:WithOptions)?"
-    r"(?:\s*\[[^\]]*\])?\s*\{([^}]*)\}"
-)
 _SKIP_DIR_NAMES = {"build", ".texenv"}
 _SCAN_SUFFIXES = {".tex", ".cls", ".sty", ".bbx", ".cbx", ".def", ".ltx"}
 
@@ -709,15 +706,10 @@ def extract_packages_from_tex(cwd: Path, files: list[Path] | None = None) -> lis
 
     for tex_file in files:
         try:
-            text = tex_file.read_text(encoding="utf-8", errors="ignore")
+            src = tex_file.read_bytes()
         except OSError:
             continue
-
-        for match in _TEX_PACKAGE_RE.finditer(text):
-            for raw_name in match.group(1).split(","):
-                stripped_name = raw_name.strip()
-                if stripped_name:
-                    packages.add(stripped_name)
+        packages |= texscan.loaded_names(src)
 
     local = {f.stem for f in files if f.suffix in {".sty", ".cls"}}
     return sorted(packages - local)

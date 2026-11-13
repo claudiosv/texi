@@ -19,6 +19,7 @@ dependencies = [
     "fonttools>=4.68.0",
     "hishel[httpx2]>=2.0.0",
     "httpx2>=2.16.0",
+    "tree-sitter-language-pack>=1.25.0",
 ]
 keywords = ["latex", "texlive", "tlmgr", "latexmk", "workspace"]
 classifiers = [
