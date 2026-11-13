@@ -2001,12 +2001,19 @@ def _run_latexmk(
             )
             return
         had_errors = _report(config, started, output, guess, returncode, all_warnings)
-        if returncode != 0:
+        if returncode != 0 or had_errors:
             if not had_errors:  # nothing parsed: show the tail
                 tail = "".join(output.splitlines(keepends=True)[-25:])
                 console.print(f"[dim]{escape(tail)}[/dim]")
                 console.print("[dim]Run with --raw for the full latexmk output.[/dim]")
-            console.print("\n[red]✖ Build failed.[/red]")
+            if returncode == 0:  # force_mode (-f) carried on past the errors
+                console.print(
+                    "\n[red]✖ Build failed: errors were reported although latexmk "
+                    "exited 0 (build.force_mode keeps it going past errors); "
+                    "the PDF may be incomplete or broken.[/red]"
+                )
+            else:
+                console.print("\n[red]✖ Build failed.[/red]")
             raise typer.Exit(code=1)
         _check_type3(config)
         outro("[green]✔ Build completed successfully![/green]")
