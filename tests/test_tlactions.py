@@ -427,7 +427,7 @@ def test_binfiles_for_selected_arch_only_with_modes_and_links(
     assert os.access(exe, os.X_OK)
     link = env / "bin" / ARCH / "tool"
     assert link.is_symlink()
-    assert Path(link).readlink() == "../../scripts/tool/tool.pl"
+    assert Path(link).readlink() == Path("../../scripts/tool/tool.pl")
     assert link.resolve() == (env / "scripts/tool/tool.pl").resolve()
     assert os.access(link, os.X_OK)
     assert not (env / "bin" / "windows").exists()
@@ -451,7 +451,7 @@ def test_standalone_binary_symlink_keeps_texmf_dist(tmp_path: Path, shims) -> No
     (env / "bin" / ARCH).mkdir(parents=True)
     install(env, ["tool"], standalone=True)
     link = env / "bin" / ARCH / "tool"
-    assert Path(link).readlink() == "../../texmf-dist/scripts/tool/tool.pl"
+    assert Path(link).readlink() == Path("../../texmf-dist/scripts/tool/tool.pl")
     assert link.resolve() == (env / "texmf-dist/scripts/tool/tool.pl").resolve()
     assert shims.calls("mktexlsr") == []
 

@@ -429,7 +429,7 @@ def clone_file(
     if dst.is_symlink() or dst.exists():
         dst.unlink()
     if src.is_symlink():
-        target = Path(src).readlink()
+        target = str(Path(src).readlink())
         Path(dst).symlink_to(relink(target) if relink else target)
         return False
     if not _native_disabled:
