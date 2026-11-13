@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # Configuration
 
 Everything lives in `texproject.toml` at the project root.
@@ -20,7 +25,7 @@ lualatex = "lualatex -interaction=nonstopmode -synctex=1 %O %S"
 bibtex_use = "always"
 ```
 
-#### `[project]`
+## `[project]`
 
 | key | default | description |
 |---|---|---|
@@ -39,11 +44,11 @@ When `src_dir` is not `"."`, texi configures `latexmk`:
 
 The main file is the first file in `build.default_files` if set, else the first of `project.targets` (both relative to `src_dir`).
 
-#### `[build]`
+## `[build]`
 
 One flat table. The keys are grouped below by what they control.
 
-##### Engine
+### Engine
 
 | key | default | description |
 |---|---|---|
@@ -62,7 +67,7 @@ One flat table. The keys are grouped below by what they control.
 | `"lualatex"` | 4 | lualatex straight to PDF; best Unicode and OpenType font support |
 | `"xelatex"` | 5 | xelatex; Unicode and system fonts |
 
-##### Engine options
+### Engine options
 
 | key | default | description |
 |---|---|---|
@@ -76,7 +81,7 @@ One flat table. The keys are grouped below by what they control.
 
 Flags already present in a `lualatex = "…"` style override aren't repeated.
 
-##### Directories
+### Directories
 
 | key | default | description |
 |---|---|---|
@@ -89,7 +94,7 @@ Flags already present in a `lualatex = "…"` style override aren't repeated.
 
 A trailing `/` is added to the directories if missing. Relative paths are relative to the project root, even with a `src_dir` (texi writes `$do_cd = 1` and anchors them).
 
-##### Programs
+### Programs
 
 Override the command latexmk runs for a tool. Use `%O` for latexmk's options and `%S` for the source file. All default to latexmk's own commands (unset).
 
@@ -102,7 +107,7 @@ and the quiet-mode switches `pdflatex_silent_switch`, `lualatex_silent_switch`, 
 pdflatex = "pdflatex -shell-escape %O %S"
 ```
 
-##### Execution
+### Execution
 
 | key | default | description |
 |---|---|---|
@@ -122,7 +127,7 @@ pdflatex = "pdflatex -shell-escape %O %S"
 | `warnings_as_errors` | `false` | Treat warnings as errors. |
 | `optimize_pdf` | `false` | pdflatex only: inject `\pdfminorversion=5 \pdfcompresslevel=9 \pdfobjcompresslevel=3` to shrink the PDF. |
 
-##### Files
+### Files
 
 | key | default | description |
 |---|---|---|
@@ -134,7 +139,7 @@ pdflatex = "pdflatex -shell-escape %O %S"
 
 `clean_ext` default: `synctex.gz`, `synctex.gz(busy)`, `run.xml`, `tex.bak`, `bbl`, `bcf`, `fdb_latexmk`, `fls`, `lof`, `lot`, `out`, `toc`, `nav`, `snm`, `vrb`. Setting it replaces the list.
 
-##### Viewers
+### Viewers
 
 All default to unset (latexmk's own defaults).
 
@@ -145,7 +150,7 @@ All default to unset (latexmk's own defaults).
 | `pdf_update_command`, `dvi_update_command`, `ps_update_command` | Command to run when the method is `"command"`. |
 | `pdf_update_signal`, `dvi_update_signal`, `ps_update_signal` | Signal number used with `"signal"` (1–64). |
 
-#### `[tex-fmt]`
+## `[tex-fmt]`
 
 See the [tex-fmt documentation](https://github.com/wgunderwood/tex-fmt). Settings for `texi fmt`, rendered as a tex-fmt config and piped to `tex-fmt` on every run. It overrides any `tex-fmt.toml` on disk.
 

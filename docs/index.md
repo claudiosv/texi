@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # texi
 
 An isolated workspace & package manager for LaTeX projects, bringing isolated `.texenv` environments akin to Python's `.venv`. Texi is a replacement for `tlmgr` in the spirit of `uv` for Python.

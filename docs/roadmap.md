@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # Roadmap
 
 - [x] Replaced `project.main` with `project.targets`, a list of files to build, e.g. `targets = ["main.tex", "appendix.tex"]`. `build.default_files` takes its value when not set.

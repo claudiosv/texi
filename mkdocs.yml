@@ -4,6 +4,7 @@ site_url: https://claudiosv.github.io/texi/
 repo_url: https://github.com/claudiosv/texi
 repo_name: claudiosv/texi
 edit_uri: edit/main/docs/
+strict: true
 
 theme:
   name: material
@@ -29,13 +30,20 @@ theme:
   features:
     - navigation.tabs
     # - navigation.sections
+    - navigation.instant
+    - navigation.instant.prefetch
+    - navigation.tracking
     - navigation.top
     - navigation.footer
+    - toc.follow
     - content.code.copy
     - content.code.annotate
     - content.tabs.link
+    - content.action.edit
+    - content.action.view
     - search.suggest
     - search.highlight
+    - search.share
   icon:
     repo: fontawesome/brands/github
 
@@ -65,6 +73,31 @@ nav:
 
 plugins:
   - search
+  - tags
+  - minify:
+      minify_html: true
+      minify_css: true
+      minify_js: true
+      cache_safe: true
+  - glightbox
+  - optimize:
+      optimize_png: false  # needs system pngquant, absent locally and in CI
+  - offline:
+      enabled: !ENV [OFFLINE, false]  # incompatible with navigation.instant; build with OFFLINE=true
+  - llmstxt:
+      markdown_description: An isolated workspace manager for LaTeX projects.
+      full_output: llms-full.txt
+      sections:
+        Home:
+          - index.md
+        Commands:
+          - commands/*.md
+        Configuration:
+          - configuration.md
+        API Reference:
+          - api/*.md
+        Roadmap:
+          - roadmap.md
   - autorefs
   - mkdocstrings:
       handlers:
@@ -89,6 +122,9 @@ markdown_extensions:
   - tables
   - footnotes
   - pymdownx.details
+  - pymdownx.keys
+  - pymdownx.striphtml
+  - pymdownx.smartsymbols
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid
@@ -96,6 +132,8 @@ markdown_extensions:
           format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight:
       anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
   - pymdownx.inlinehilite
   - pymdownx.snippets:
       check_paths: true
@@ -105,6 +143,7 @@ markdown_extensions:
       alternate_style: true
   - toc:
       permalink: true
+      toc_depth: 3
 
 watch:
   - src/texi
