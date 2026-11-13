@@ -24,7 +24,7 @@ import tarfile
 from collections.abc import Callable
 from pathlib import Path
 
-import httpx
+import httpx2
 
 from texi import archive, tlpdb
 
@@ -58,12 +58,12 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _version(client: httpx.Client) -> str:
+def _version(client: httpx2.Client) -> str:
     try:
         r = client.get(INFO_URL)
         r.raise_for_status()
         return str(r.json()["version"]["number"])
-    except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
+    except (httpx2.HTTPError, ValueError, KeyError, TypeError) as e:
         msg = f"cannot read the {PACKAGE} version from CTAN: {e}"
         raise TexFmtError(msg) from e
 
@@ -80,7 +80,7 @@ def _stored(entry: Path, asset: str) -> Path | None:
     return None
 
 
-def _download(client: httpx.Client, asset: str, entry: Path, version: str) -> Path:
+def _download(client: httpx2.Client, asset: str, entry: Path, version: str) -> Path:
     try:
         url = BIN_URL.format(name=BINARY, asset=asset)
         r = client.get(url)
@@ -98,7 +98,7 @@ def _download(client: httpx.Client, asset: str, entry: Path, version: str) -> Pa
                 msg = f"no {BINARY} in {BINARY}-{asset}.tar.gz"
                 raise TexFmtError(msg)
             data = fh.read()
-    except (httpx.HTTPError, tarfile.TarError, OSError) as e:
+    except (httpx2.HTTPError, tarfile.TarError, OSError) as e:
         msg = f"cannot download {PACKAGE}: {e}"
         raise TexFmtError(msg) from e
     entry.mkdir(parents=True, exist_ok=True)
@@ -160,7 +160,7 @@ def outdated(
     env_dir: Path,
     arch: str,
     *,
-    client: httpx.Client | None = None,
+    client: httpx2.Client | None = None,
 ) -> tuple[str, str] | None:
     """``(installed, latest)`` if the tree's tex-fmt is older than CTAN's, else None.
 
@@ -171,9 +171,9 @@ def outdated(
         return None
     have = installed_version(env_dir, arch)
     own = client is None
-    cl = client or httpx.Client(
+    cl = client or httpx2.Client(
         follow_redirects=True,
-        timeout=httpx.Timeout(30.0, read=120.0),
+        timeout=httpx2.Timeout(30.0, read=120.0),
         headers={"User-Agent": tlpdb.USER_AGENT},
     )
     try:
@@ -190,7 +190,7 @@ def ensure(
     env_dir: Path,
     arch: str | None = None,
     *,
-    client: httpx.Client | None = None,
+    client: httpx2.Client | None = None,
     notice: Callable[[str], None] | None = None,
     update: bool = True,
 ) -> Path | None:
@@ -216,9 +216,9 @@ def ensure(
         say(f"tex-fmt not installed: CTAN has no {PACKAGE} binary for {arch}")
         return None
     own = client is None
-    cl = client or httpx.Client(
+    cl = client or httpx2.Client(
         follow_redirects=True,
-        timeout=httpx.Timeout(30.0, read=120.0),
+        timeout=httpx2.Timeout(30.0, read=120.0),
         headers={"User-Agent": tlpdb.USER_AGENT},
     )
     try:

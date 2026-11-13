@@ -6,7 +6,7 @@ import os
 import tarfile
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
 import shims as shims_mod
 
@@ -127,14 +127,14 @@ def shims(env_setup: shims_mod.Shims) -> shims_mod.Shims:
     return env_setup
 
 
-def client() -> httpx.Client:
-    def handler(req: httpx.Request) -> httpx.Response:
+def client() -> httpx2.Client:
+    def handler(req: httpx2.Request) -> httpx2.Response:
         name = req.url.path.rsplit("/", 1)[-1].removesuffix(".tar.xz")
         if name in BLOBS:
-            return httpx.Response(200, content=BLOBS[name])
-        return httpx.Response(404)
+            return httpx2.Response(200, content=BLOBS[name])
+        return httpx2.Response(404)
 
-    return httpx.Client(transport=httpx.MockTransport(handler))
+    return httpx2.Client(transport=httpx2.MockTransport(handler))
 
 
 def new_env(tmp_path: Path, name: str = "p") -> Path:
@@ -470,13 +470,13 @@ def test_foreign_arch_is_never_installed(tmp_path: Path) -> None:
 def test_failed_download_lists_package_and_never_calls_tlmgr(
     tmp_path: Path, shims
 ) -> None:
-    def boom(req: httpx.Request) -> httpx.Response:
+    def boom(req: httpx2.Request) -> httpx2.Response:
         if "fontpkg" in req.url.path:
-            return httpx.Response(500)
+            return httpx2.Response(500)
         return (
             client().send(req)
             if False
-            else httpx.Response(
+            else httpx2.Response(
                 200,
                 content=BLOBS[req.url.path.rsplit("/", 1)[-1].removesuffix(".tar.xz")],
             )
@@ -488,7 +488,7 @@ def test_failed_download_lists_package_and_never_calls_tlmgr(
         REPO,
         ["fontpkg", "trig"],
         new_env(tmp_path),
-        client=httpx.Client(transport=httpx.MockTransport(boom)),
+        client=httpx2.Client(transport=httpx2.MockTransport(boom)),
         arch=ARCH,
         notice=notes.append,
     )

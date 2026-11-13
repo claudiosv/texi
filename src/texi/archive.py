@@ -45,7 +45,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-import httpx
+import httpx2
 
 from texi import resolver, tlactions, tlpdb
 
@@ -155,7 +155,7 @@ def _download(
     url: str,
     dest: Path,
     expected: str,
-    client: httpx.Client | None,
+    client: httpx2.Client | None,
     progress: Callable[[int, int], None] | None,
     size_hint: int,
     verify: bool = True,
@@ -181,9 +181,9 @@ def _download(
                             progress(done, total)
             else:
                 own = client is None
-                cl = client or httpx.Client(
+                cl = client or httpx2.Client(
                     follow_redirects=True,
-                    timeout=httpx.Timeout(30.0, read=120.0),
+                    timeout=httpx2.Timeout(30.0, read=120.0),
                     headers={"User-Agent": tlpdb.USER_AGENT},
                 )
                 try:
@@ -199,7 +199,7 @@ def _download(
                 finally:
                     if own:
                         cl.close()
-    except (httpx.HTTPError, OSError) as e:
+    except (httpx2.HTTPError, OSError) as e:
         dest.unlink(missing_ok=True)
         msg = f"download of {url} failed: {e}"
         raise ArchiveError(msg) from e
@@ -240,7 +240,7 @@ def fetch(
     repository: str,
     pkg: tlpdb.TlPackage,
     *,
-    client: httpx.Client | None = None,
+    client: httpx2.Client | None = None,
     progress: Progress | None = None,
     notice: Callable[[str], None] | None = None,
     verify: bool = True,
@@ -255,7 +255,7 @@ def fetch(
     pkg
         Package from the tlpdb index (revision and container checksum are used).
     client
-        httpx client to use; default is a fresh one.
+        httpx2 client to use; default is a fresh one.
     progress
         Called with ``("Downloading <name>", bytes_done, bytes_total)``.
     notice
@@ -950,7 +950,7 @@ def install_packages(
     arch: str | None = None,
     infrastructure: bool = False,
     verify: bool = True,
-    client: httpx.Client | None = None,
+    client: httpx2.Client | None = None,
     progress: Progress | None = None,
     log: Callable[[str], None] | None = None,
     notice: Callable[[str], None] | None = None,
@@ -998,7 +998,7 @@ def install_packages(
     verify
         Refuse packages whose sha512 differs from the index (see :func:`fetch`).
     client
-        httpx client for downloads.
+        httpx2 client for downloads.
     progress
         ``(label, done, total)`` callback.
     log

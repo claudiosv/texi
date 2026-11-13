@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Never
 
-import httpx
+import httpx2
 import pytest
 import shims as shims_mod
 
@@ -83,17 +83,17 @@ def never_tlmgr(shims: shims_mod.Shims):
     assert shims.calls("tlmgr") == []
 
 
-def make_client(hits: list[str] | None = None, corrupt: bool = False) -> httpx.Client:
-    def handler(req: httpx.Request) -> httpx.Response:
+def make_client(hits: list[str] | None = None, corrupt: bool = False) -> httpx2.Client:
+    def handler(req: httpx2.Request) -> httpx2.Response:
         name = req.url.path.rsplit("/", 1)[-1].removesuffix(".tar.xz")
         if hits is not None:
             hits.append(name)
         if name not in BLOBS:
-            return httpx.Response(404)
+            return httpx2.Response(404)
         data = BLOBS[name]
-        return httpx.Response(200, content=b"junk" + data if corrupt else data)
+        return httpx2.Response(200, content=b"junk" + data if corrupt else data)
 
-    return httpx.Client(transport=httpx.MockTransport(handler))
+    return httpx2.Client(transport=httpx2.MockTransport(handler))
 
 
 def new_env(tmp_path: Path, name: str = "p") -> Path:
@@ -153,12 +153,12 @@ def test_checksum_mismatch_rejected_and_nothing_left(store: Path) -> None:
 def test_http_error_leaves_nothing(store: Path) -> None:
     pkg = tlpdb.parse_tlpdb(_db_text()).get("bar")
 
-    def boom(req: httpx.Request) -> httpx.Response:
-        return httpx.Response(500)
+    def boom(req: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(500)
 
     with pytest.raises(archive.ArchiveError):
         archive.fetch(
-            REPO, pkg, client=httpx.Client(transport=httpx.MockTransport(boom))
+            REPO, pkg, client=httpx2.Client(transport=httpx2.MockTransport(boom))
         )
     assert list(store.iterdir()) == []
 
@@ -181,11 +181,11 @@ def test_offline_reuse(store: Path) -> None:
     db = tlpdb.parse_tlpdb(_db_text())
     archive.fetch(REPO, db.get("bar"), client=make_client())
 
-    def offline(req: httpx.Request) -> httpx.Response:
+    def offline(req: httpx2.Request) -> httpx2.Response:
         msg = "offline"
-        raise httpx.ConnectError(msg)
+        raise httpx2.ConnectError(msg)
 
-    client = httpx.Client(transport=httpx.MockTransport(offline))
+    client = httpx2.Client(transport=httpx2.MockTransport(offline))
     entry, fresh = archive.fetch(REPO, db.get("bar"), client=client)
     assert not fresh
     assert archive.lookup(REPO, db.get("bar")) is not None
@@ -534,15 +534,15 @@ def test_download_retries_then_succeeds() -> None:
     calls = {"n": 0}
     good = make_client()
 
-    def handler(req: httpx.Request) -> httpx.Response:
+    def handler(req: httpx2.Request) -> httpx2.Response:
         calls["n"] += 1
         if calls["n"] < 3:
             msg = "[SSL: CERTIFICATE_VERIFY_FAILED]"
-            raise httpx.ConnectError(msg)
+            raise httpx2.ConnectError(msg)
         return good.send(req)
 
     notes: list[str] = []
-    client = httpx.Client(transport=httpx.MockTransport(handler))
+    client = httpx2.Client(transport=httpx2.MockTransport(handler))
     entry, fresh = archive.fetch(
         REPO, db.get("bar"), client=client, notice=notes.append
     )
@@ -556,12 +556,12 @@ def test_download_gives_up_and_install_is_not_done(tmp_path: Path) -> None:
     db = tlpdb.parse_tlpdb(_db_text())
     calls = {"n": 0}
 
-    def handler(req: httpx.Request) -> httpx.Response:
+    def handler(req: httpx2.Request) -> httpx2.Response:
         calls["n"] += 1
         msg = "[SSL: CERTIFICATE_VERIFY_FAILED]"
-        raise httpx.ConnectError(msg)
+        raise httpx2.ConnectError(msg)
 
-    client = httpx.Client(transport=httpx.MockTransport(handler))
+    client = httpx2.Client(transport=httpx2.MockTransport(handler))
     labels: list[tuple[str, int, int]] = []
     res = run(
         db,
@@ -575,11 +575,11 @@ def test_download_gives_up_and_install_is_not_done(tmp_path: Path) -> None:
     assert not any(total and done == total for _l, done, total in labels)
 
 
-def _stale_client() -> httpx.Client:
+def _stale_client() -> httpx2.Client:
     """A mirror that serves a valid but older build of bar (a different sha512)."""
     old = _container({"tex/latex/bar/bar.sty": "% old bar\n"}, "bar")
-    return httpx.Client(
-        transport=httpx.MockTransport(lambda req: httpx.Response(200, content=old))
+    return httpx2.Client(
+        transport=httpx2.MockTransport(lambda req: httpx2.Response(200, content=old))
     )
 
 
@@ -640,13 +640,13 @@ def test_first_download_uses_the_index_mirror_then_the_redirector() -> None:
     db = tlpdb.parse_tlpdb(_db_text())
     seen: list[str] = []
 
-    def handler(req: httpx.Request) -> httpx.Response:
+    def handler(req: httpx2.Request) -> httpx2.Response:
         seen.append(req.url.host)
         if req.url.host == "pinned.example":
-            return httpx.Response(200, content=b"stale")  # fails the sha512
-        return httpx.Response(200, content=BLOBS["bar"])
+            return httpx2.Response(200, content=b"stale")  # fails the sha512
+        return httpx2.Response(200, content=BLOBS["bar"])
 
-    client = httpx.Client(transport=httpx.MockTransport(handler))
+    client = httpx2.Client(transport=httpx2.MockTransport(handler))
     notes: list[str] = []
     entry, fresh = archive.fetch(
         REPO,
@@ -683,15 +683,15 @@ class _Ctan:
         self.version = version
         self.hits: list[str] = []
 
-    def client(self) -> httpx.Client:
-        def handler(req: httpx.Request) -> httpx.Response:
+    def client(self) -> httpx2.Client:
+        def handler(req: httpx2.Request) -> httpx2.Response:
             self.hits.append(req.url.path)
             if req.url.host == "ctan.org":
-                return httpx.Response(200, json={"version": {"number": self.version}})
+                return httpx2.Response(200, json={"version": {"number": self.version}})
             body = f"#!/bin/sh\necho tex-fmt {self.version}\n".encode()
-            return httpx.Response(200, content=_formatter_tgz(body))
+            return httpx2.Response(200, content=_formatter_tgz(body))
 
-        return httpx.Client(transport=httpx.MockTransport(handler))
+        return httpx2.Client(transport=httpx2.MockTransport(handler))
 
 
 def test_tex_fmt_is_installed_from_a_direct_url_once(
@@ -738,7 +738,9 @@ def test_tex_fmt_updates_only_when_ctan_has_a_newer_version(
 def test_tex_fmt_failure_is_only_a_notice(tmp_path: Path, store: Path) -> None:
     from texi import texfmt
 
-    down = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(500)))
+    down = httpx2.Client(
+        transport=httpx2.MockTransport(lambda req: httpx2.Response(500))
+    )
     notes: list[str] = []
     env = tmp_path / ".texenv"
     assert texfmt.ensure(env, "x86_64-linux", client=down, notice=notes.append) is None
