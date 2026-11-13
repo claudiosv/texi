@@ -22,6 +22,7 @@ has expired, calls raise `CtanError` (and `CtanClient.find_texlive` returns
 from __future__ import annotations
 
 import os
+import weakref
 from pathlib import Path
 from typing import Any, Self
 
@@ -373,6 +374,8 @@ class CtanClient:
             follow_redirects=True,
             headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
         )
+        # Dropping the CtanClient closes the client and its SQLite cache too.
+        self._close = weakref.finalize(self, self._client.close)
 
     def __enter__(self) -> Self:
         return self
@@ -383,7 +386,7 @@ class CtanClient:
     def close(self) -> None:
         """Close the HTTP client (and cache storage) if this object created it."""
         if self._owns_client:
-            self._client.close()
+            self._close()
 
     # -- plumbing
 

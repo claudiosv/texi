@@ -20,13 +20,14 @@ import re
 import sqlite3
 import subprocess
 import urllib.error
+import weakref
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
@@ -349,6 +350,8 @@ class Tlpdb:
 
     def __init__(self, conn: sqlite3.Connection, index_path: Path | None = None):
         self._conn = conn
+        # The Tlpdb owns the connection: dropping it closes the connection too.
+        self._close = weakref.finalize(self, conn.close)
         self.index_path = index_path
         meta = dict(conn.execute("SELECT key, value FROM meta"))
         self.source: str = meta.get("source", "")
@@ -392,8 +395,14 @@ class Tlpdb:
             return None
 
     def close(self) -> None:
-        """Close the connection."""
-        self._conn.close()
+        """Close the connection (also done when the Tlpdb is garbage-collected)."""
+        self._close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
 
     # -- lookups --------------------------------------------------------------
 
@@ -1429,6 +1438,7 @@ def load_remote(
             etag = resp.headers.get("ETag")
             last_mod = resp.headers.get("Last-Modified")
     except urllib.error.HTTPError as e:
+        e.close()  # an HTTPError is also the (unread) response
         if e.code == 304 and have_cache:
             meta["fetched"] = now
             _write_meta(meta_path, meta)
@@ -1462,7 +1472,7 @@ def load_remote(
             try:
                 old_revisions = old.revisions()
             finally:
-                old._conn.close()
+                old.close()
     except OSError, sqlite3.Error:
         pass
     # The redirector may hand us a mirror that is behind the copy we already have.
