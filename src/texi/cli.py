@@ -685,6 +685,21 @@ _SKIP_DIR_NAMES = {"build", ".texenv"}
 _SCAN_SUFFIXES = {".tex", ".cls", ".sty", ".bbx", ".cbx", ".def", ".ltx"}
 
 
+def _prefetch_grammar() -> None:
+    """Fetch the LaTeX grammar once, from a command that needs the network anyway.
+
+    Later scans (``texi build``'s hints, ``texi unused``) then work offline.
+    """
+    if texscan.is_cached():
+        return
+    console.print("[dim]Fetching the LaTeX grammar (once)...[/dim]")
+    if not texscan.prefetch():
+        console.print(
+            "[yellow]Could not fetch the LaTeX grammar; falling back to a plainer "
+            "source scan that also counts commented-out \\usepackage lines.[/yellow]"
+        )
+
+
 def _source_files(cwd: Path) -> list[Path]:
     """TeX source files under cwd, skipping build output, .texenv and dot-dirs."""
     return [
@@ -801,6 +816,7 @@ def init(
 ) -> None:
     """Creates a texproject.toml, scanning any .tex files for package dependencies."""
     _intro("texi init")
+    _prefetch_grammar()
     cwd = Path.cwd()
     config_path = cwd / "texproject.toml"
 
@@ -1180,6 +1196,7 @@ def sync(
     _intro("texi sync")
     config = load_project_config(Path.cwd() / "texproject.toml")
     _apply_project(config)
+    _prefetch_grammar()
     if not no_upgrade:
         _resolver_tlpdb(
             console, refresh=True

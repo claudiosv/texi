@@ -7,8 +7,10 @@ grammar is not available (no network on first use), falls back to a regular expr
 
 from __future__ import annotations
 
+import os
 import re
 from functools import cache
+from pathlib import Path
 from typing import Any
 
 _INCLUDE_RE = re.compile(
@@ -26,14 +28,39 @@ _GENERIC = frozenset({
 _INCLUDES = frozenset({"package_include", "class_include"})
 
 
+def cache_dir() -> Path:
+    """``$XDG_CACHE_HOME/texi/grammar`` (default ``~/.cache/texi/grammar``)."""
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "texi" / "grammar"
+
+
+@cache
+def _pack() -> Any | None:
+    """The language pack, set to keep its grammars in :func:`cache_dir`."""
+    try:
+        import tree_sitter_language_pack as pack
+        from tree_sitter_language_pack.options import PackConfig
+
+        pack.configure(PackConfig(cache_dir=str(cache_dir())))
+        return pack
+    except Exception:  # not installed
+        return None
+
+
 @cache
 def _parser() -> Any | None:
     try:
-        from tree_sitter_language_pack import get_parser
-
-        return get_parser("latex")
+        return _pack().get_parser("latex")
     except Exception:  # not installed, or the grammar download failed
         return None
+
+
+def is_cached() -> bool:
+    """True if the grammar is already on disk, so loading it needs no network."""
+    try:
+        return "latex" in _pack().downloaded_languages()
+    except Exception:
+        return False
 
 
 def prefetch() -> bool:
@@ -82,3 +109,32 @@ def loaded_names(src: bytes) -> set[str]:
     if parser is None:
         return _by_regex(src.decode("utf-8", "ignore"))
     return _by_tree(parser, src)
+
+
+def unclosed_braces(text: str) -> list[int] | None:
+    """Offsets in ``text`` of ``{`` that the parser could not match with a ``}``.
+
+    The grammar also reports some valid LaTeX this way (an environment opened in one
+    macro and closed in another), so use the result only to narrow down a brace TeX
+    already complained about. None if the grammar is not available.
+    """
+    parser = _parser()
+    if parser is None:
+        return None
+    src = text.encode("utf-8", "surrogatepass")
+    offsets: set[int] = set()
+    stack = [parser.parse(src).root_node]
+    while stack:
+        node = stack.pop()
+        parent = node.parent
+        if (
+            node.type == "{"
+            and not node.is_named
+            and parent is not None
+            and parent.type == "ERROR"
+        ) or (node.type == "ERROR" and src.startswith(b"{", node.start_byte)):
+            offsets.add(node.start_byte)
+        stack.extend(node.children)
+    if text.isascii():
+        return sorted(offsets)
+    return sorted(len(src[:o].decode("utf-8", "surrogatepass")) for o in offsets)

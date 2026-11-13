@@ -1,6 +1,8 @@
 r"""Locate the unclosed argument behind "File ended while scanning use of \\x"."""
 
-from texi import runaway
+import pytest
+
+from texi import runaway, texscan
 
 SRC = (
     "\\documentclass{acmart}\n"
@@ -48,3 +50,39 @@ def test_without_a_macro_or_a_brace() -> None:
     assert runaway.locate("{2026-03-28 \\par", None, {"a.tex": SRC}).line == 3
     assert runaway.locate("plain text", "received", {"a.tex": SRC}) is None
     assert runaway.runaway_text(["<argument> x"]) is None
+
+
+AMBIGUOUS = (
+    "\\begin{document}\n"
+    "% \\textbf{Note this is commented\n"
+    "\\textbf{Note} closed fine.\n"
+    "\n"
+    "\\textbf{Note the missing brace\n"
+    "\n"
+    "More text.\n"
+    "\\end{document}\n"
+)
+
+
+def test_skips_comments_and_closed_uses() -> None:
+    if not texscan.prefetch():
+        pytest.skip("tree-sitter LaTeX grammar not available")
+    found = runaway.locate("{Note \\par", "textbf", {"a.tex": AMBIGUOUS})
+    assert found
+    assert (found.line, found.blank_line) == (5, 6)
+
+
+def test_unicode_before_the_brace() -> None:
+    if not texscan.prefetch():
+        pytest.skip("tree-sitter LaTeX grammar not available")
+    src = "% café ünïcode\n\\textbf{Grüße} ok\n\\textbf{Grüße offen\n\nx\n"
+    found = runaway.locate("{Grüße \\par", "textbf", {"a.tex": src})
+    assert found
+    assert found.line == 3
+
+
+def test_regex_fallback_without_grammar(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(texscan, "unclosed_braces", lambda text: None)
+    assert runaway.locate("{2026-03-28 \\par", "received", {"a.tex": SRC}).line == 3
+    # without the parser, the first use with that start wins (here: the comment)
+    assert runaway.locate("{Note \\par", "textbf", {"a.tex": AMBIGUOUS}).line == 2

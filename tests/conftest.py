@@ -9,6 +9,17 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    """Pin the LaTeX grammar cache before tests point $XDG_CACHE_HOME at tmp dirs.
+
+    The pack is configured once per process; left to the first test that parses,
+    it would cache (and re-download) the grammar in that test's tmp dir every run.
+    """
+    from texi import texscan
+
+    texscan._pack()
+
+
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:

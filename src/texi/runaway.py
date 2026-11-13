@@ -2,13 +2,16 @@ r"""Find the unclosed argument behind TeX's "File ended while scanning use of \\
 
 TeX reports the *end* of the run-away argument, which is the end of the file. The log
 also prints the start of the argument (``Runaway argument? {2026-03-28 \\par ...``).
-This module finds where that argument starts in the sources.
+This module finds where that argument starts in the sources: among the braces the
+tree-sitter parser could not close, else the first use of the macro with that start.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+
+from texi import texscan
 
 #: Error messages that come with a "Runaway ..." line, and the macro they name.
 _MACRO = re.compile(
@@ -79,6 +82,24 @@ def locate(runaway: str, macro: str | None, sources: dict[str, str]) -> Located 
     if not token.startswith("{") or len(token) < 2:
         return None
     wanted = re.escape(token[1:])
+    starts = re.compile(r"\{\s*" + wanted)
+    before = (
+        re.compile(r"\\" + re.escape(macro) + r"\s*(?:\[[^\]]*\]\s*)*\Z")
+        if macro
+        else None
+    )
+
+    def fits(text: str, brace: int) -> bool:
+        return bool(starts.match(text, brace)) and (
+            before is None or bool(before.search(text, max(0, brace - 200), brace))
+        )
+
+    # The braces the parser could not close; skips comments and closed uses.
+    for path, text in sources.items():
+        for brace in texscan.unclosed_braces(text) or []:
+            if fits(text, brace):
+                return _located(path, text, brace, macro, token)
+    # No grammar, or it lost track: the first use of the macro with this start.
     if macro:
         pat = re.compile(
             r"\\" + re.escape(macro) + r"\s*(?:\[[^\]]*\]\s*)*\{(?=\s*" + wanted + ")"
@@ -86,10 +107,15 @@ def locate(runaway: str, macro: str | None, sources: dict[str, str]) -> Located 
     else:
         pat = re.compile(r"\{(?=\s*" + wanted + ")")
     for path, text in sources.items():
-        for m in pat.finditer(text):
-            brace = m.end() - 1
-            line = text.count("\n", 0, brace) + 1
-            blank = _BLANK.search(text, brace)
-            blank_line = text.count("\n", 0, blank.start()) + 2 if blank else None
-            return Located(path, line, macro or "?", blank_line, token)
+        if m := pat.search(text):
+            return _located(path, text, m.end() - 1, macro, token)
     return None
+
+
+def _located(
+    path: str, text: str, brace: int, macro: str | None, token: str
+) -> Located:
+    line = text.count("\n", 0, brace) + 1
+    blank = _BLANK.search(text, brace)
+    blank_line = text.count("\n", 0, blank.start()) + 2 if blank else None
+    return Located(path, line, macro or "?", blank_line, token)
