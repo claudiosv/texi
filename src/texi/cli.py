@@ -733,6 +733,20 @@ def extract_packages_from_tex(cwd: Path, files: list[Path] | None = None) -> lis
     return sorted(packages - local)
 
 
+def discover_main_files(cwd: Path, files: list[Path]) -> list[Path]:
+    r"""Find .tex entry points declaring ``\documentclass``, relative to cwd."""
+    found = []
+    for path in files:
+        if path.suffix != ".tex":
+            continue
+        try:
+            if texscan.has_documentclass(path.read_bytes()):
+                found.append(path.relative_to(cwd))
+        except OSError:
+            continue
+    return sorted(found)
+
+
 def resolve_dependencies(
     packages: list[str],
     console: Console,
@@ -834,6 +848,16 @@ def init(
             raise typer.Exit(code=1)
 
     tex_files = _source_files(cwd)
+    main_files = discover_main_files(cwd, tex_files)
+    src_dir = "src"
+    targets = ["main.tex"]
+    if main_files:
+        if not all(p.is_relative_to("src") for p in main_files):
+            src_dir = "."
+        targets = [p.relative_to(src_dir).as_posix() for p in main_files]
+        console.print(f"Found main TeX file(s): {escape(', '.join(map(str, main_files)))}")
+    else:
+        console.print("[dim]No \\documentclass found; using src/main.tex.[/dim]")
     packages = extract_packages_from_tex(cwd, tex_files)
 
     if packages:
@@ -859,7 +883,9 @@ def init(
 
     try:
         config = TexProjectConfig(
-            project=ProjectConfig(name=cwd.name, dependencies=dependencies)
+            project=ProjectConfig(
+                name=cwd.name, dependencies=dependencies, src_dir=src_dir, targets=targets
+            )
         )
     except ValidationError as e:
         console.print("[red]Configuration Validation Error:[/red]")

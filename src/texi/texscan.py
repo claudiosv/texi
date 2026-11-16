@@ -26,6 +26,33 @@ _GENERIC = frozenset({
     r"\RequirePackageWithOptions",
 })
 _INCLUDES = frozenset({"package_include", "class_include"})
+_DOCUMENTCLASS_RE = re.compile(
+    r"(?P<declaration>\\documentclass(?![A-Za-z@])"
+    r"(?:\s*\[[^\]]*\])?\s*\{[^}]+\})|\\[^\r\n]"
+)
+
+
+def _without_comments(text: str) -> str:
+    r"""Strip TeX line comments, respecting escaped percent signs (``\%``)."""
+    return re.sub(
+        r"\\[^\r\n]|%[^\r\n]*", lambda m: "" if m[0].startswith("%") else m[0], text
+    )
+
+
+def has_documentclass(src: bytes) -> bool:
+    r"""Whether a source declares ``\documentclass``; use a comment-aware fallback."""
+    parser = _parser()
+    if parser is None:
+        text = _without_comments(src.decode("utf-8", "ignore"))
+        return any(m.group("declaration") for m in _DOCUMENTCLASS_RE.finditer(text))
+    stack = [parser.parse(src).root_node]
+    while stack:
+        node = stack.pop()
+        if node.type == "class_include":
+            if any(child.text == rb"\documentclass" for child in node.children):
+                return True
+        stack.extend(node.children)
+    return False
 
 
 def cache_dir() -> Path:

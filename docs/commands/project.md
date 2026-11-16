@@ -2,7 +2,9 @@
 
 ## `texi init`
 
-Create a `texproject.toml` for this project, filling in packages found in your `.tex` files. The file has `[project]` with `name` = directory name and `src_dir = "src"`; `dependencies` is seeded by scanning `.tex` files for `\usepackage`/`\RequirePackage`.
+Create a `texproject.toml` for this project, filling in packages found in your `.tex` files. The file has `[project]` with `name` = directory name; `dependencies` is seeded by scanning `.tex` files for `\usepackage`/`\RequirePackage`.
+
+Init discovers `.tex` files containing `\documentclass` using tree-sitter when available, otherwise a regex that ignores `%` comments and respects escaped percent signs. All matches become `targets`, sorted by path. Build output, `.texenv`, and hidden directories are skipped. If all matches are under `src/`, `src_dir` is `"src"`; otherwise it is `"."`, with targets relative to the project root. If no matches are found, init reports that it is keeping the default `src/main.tex` target. You can edit the generated targets afterward.
 
 | option | description |
 |---|---|

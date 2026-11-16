@@ -107,6 +107,8 @@ When `src_dir` is not `"."`, the generated `.latexmkrc` stays at the project roo
 
 The main file is `build.default_files[0]` if set, else the first of `project.targets` (both relative to `src_dir`).
 
+`texi init` discovers targets from `.tex` files containing `\documentclass`, using tree-sitter or a comment-aware regex fallback. It uses `src_dir = "src"` if all targets are under `src/`, otherwise `"."`. With no matches, it keeps the default `src/main.tex`.
+
 ### `[build]`
 
 One flat table. The keys are grouped below by what they control.
