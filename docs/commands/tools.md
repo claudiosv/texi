@@ -30,9 +30,10 @@ Convert every file in `project.targets` (or `build.default_files`) into `build/e
 
 ## `texi build-tree`
 
-Show which files the last build actually read, as a directory tree. It relies on the `.fls` file written by `-recorder` (`build.recorder`, on by default).
+Show which files the last build actually read, as a directory tree. It relies on the `.fls` file written by `-recorder` (`build.recorder`, on by default), plus the `.fdb_latexmk` file, which also lists what bibtex and biber read. `.bib` files outside the project appear under an "outside project (.bib only)" branch; no other outside files are shown.
 
 | option | description |
 |---|---|
 | `--project-dir <path>` | Project directory. |
 | `--fls-filename <str>` | Name of the `.fls` file to read. |
+| `--bib` | Print only the absolute paths of the `.bib` files the build read, inside or outside the project. |

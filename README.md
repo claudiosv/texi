@@ -24,7 +24,7 @@ An isolated workspace manager for LaTeX projects.
 | `texi fmt [files]` | Formats `.tex` files under `src_dir` with `tex-fmt`, using the settings in `[tex-fmt]`. `--check` only reports. |
 | `texi scan` | Lists the packages your sources use and their TeX Live packages. |
 | `texi pdf-fonts substitute PDF FONT` | Replaces a named Type 3 font using an exact Font Book face, matplotlib bundle, or `--font-file` / `--font-name`. Verifies glyph mappings and preserves spacing and positions. Updates in place with a `.bak` by default; `-o` or `--no-in-place` writes separately. |
-| `texi build-tree` | Shows which files the last build actually read. |
+| `texi build-tree` | Shows which files the last build actually read, including `.bib` files (`--bib` lists only those). |
 | `texi unused` | Lists `texproject.toml` packages the last build and your sources do not use. |
 | `texi activate` | Prints shell code that puts `.texenv/` first: `eval "$(texi activate)"` (`--off` undoes it). |
 | `texi list` | Lists the packages installed in `.texenv/` with their revision (`-d` adds the caption). |
