@@ -1989,7 +1989,7 @@ def _run_latexmk(
     else:
         rc_input = rc_text
         rc_arg = "/dev/stdin"
-        if not execution.silent:
+        if DEBUG:
             console.print("[dim]Piping generated latexmkrc to latexmk[/dim]")
     if DEBUG:
         console.print("[dim]--- generated latexmkrc ---[/dim]")
@@ -2014,7 +2014,7 @@ def _run_latexmk(
         env["max_print_line"] = str(MAX_PRINT_LINE)  # Avoid line wrapping in logs
         env["error_line"] = "254"  # longest allowed, keeps error context whole
         env["half_error_line"] = "238"
-        if not execution.silent:
+        if DEBUG:
             console.print("[dim]Using local .texenv for compilation[/dim]")
     else:
         console.print(
