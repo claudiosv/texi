@@ -353,7 +353,7 @@ def test_build_reruns_full_after_previous_error(
     calls: list[bool] = []
 
     def fake_captured(cmd, env, rc_input):
-        # the generated rc says whether this is the --full run
+        # the generated rc says whether this is the full-rebuild run
         calls.append(bool(re.search(r"\$go_mode\s*=\s*1\b", rc_input or "")))
         if len(calls) == 1:
             return 12, "Latexmk: 'pdflatex' gave an error in previous invocation\n"
@@ -520,3 +520,32 @@ def test_sync_says_where_the_index_comes_from(
     assert "Could not reach" in r.output
     assert "cached package index" in r.output
     cli._reset_tlpdb_memo()
+
+
+def test_incremental_build_shows_previous_diagnostics(project: Path, monkeypatch) -> None:
+    cfg = cli.load_project_config(project / "texproject.toml")
+    aux = project / cfg.build.aux_dir
+    aux.mkdir(parents=True, exist_ok=True)
+    log = aux / f"{cfg.jobname}.log"
+    log.write_text(
+        "This is pdfTeX\n(./main.tex\n"
+        "LaTeX Warning: Reference `foo' on page 1 undefined on input line 3.\n)\n"
+    )
+    os.utime(log, (1, 1))  # long before this run
+
+    monkeypatch.setattr(
+        cli,
+        "_run_captured",
+        lambda cmd, env, rc: (0, "Latexmk: All targets (main.pdf) are up-to-date\n"),
+    )
+    monkeypatch.setattr(cli, "_ensure_latexmk", lambda: None)
+    monkeypatch.setattr(cli, "_check_type3", lambda config: None)
+
+    r = runner.invoke(cli.app, ["build"])
+    assert r.exit_code == 0, r.output
+    assert "diagnostics from the last build" in r.output
+    assert "undefined" in r.output
+
+    r = runner.invoke(cli.app, ["build", "--full"])  # full rebuild: stale log is ignored
+    assert "diagnostics from the last build" not in r.output
+    assert "undefined" not in r.output

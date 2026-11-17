@@ -1597,8 +1597,14 @@ def install(
 _RUN_RE = re.compile(r"Run number (\d+) of rule '([^']+)'")
 
 
-def _collect_diagnostics(config: TexProjectConfig, since: float) -> list[Diagnostic]:
-    """Parse this run's TeX and biber/bibtex logs from the aux dir."""
+def _collect_diagnostics(
+    config: TexProjectConfig, since: float, *, stale_ok: bool = False
+) -> list[Diagnostic]:
+    """Parse this run's TeX and biber/bibtex logs from the aux dir.
+
+    Logs older than the run are skipped unless `stale_ok` (nothing was rerun, so
+    the existing logs describe the last build).
+    """
     aux = Path.cwd() / config.build.aux_dir
     names = (
         [config.set_jobname]
@@ -1617,7 +1623,7 @@ def _collect_diagnostics(config: TexProjectConfig, since: float) -> list[Diagnos
             ),
         ):
             path = aux / f"{name}{ext}"
-            if path.is_file() and path.stat().st_mtime >= since - 2:
+            if path.is_file() and (stale_ok or path.stat().st_mtime >= since - 2):
                 diags += parse(path.read_text(encoding="utf-8", errors="replace"))
         _resolve_biber_temp_files(diags, config, aux / f"{name}.bcf")
     _explain_runaways(diags, config)
@@ -1817,7 +1823,13 @@ def _report(
     all_warnings: bool = False,
 ) -> bool:
     """Print the diagnostics of one latexmk run; returns whether any error was found."""
-    diags = _collect_diagnostics(config, since)
+    # incremental and nothing changed: no rule ran, so show the last build's logs
+    stale_ok = config.build.go_mode is GoMode.REBUILD and "up-to-date" in output
+    diags = _collect_diagnostics(config, since, stale_ok=stale_ok)
+    if stale_ok:
+        console.print(
+            "[dim]Nothing changed; showing diagnostics from the last build.[/dim]"
+        )
     if returncode is not None and not any(d.kind == "error" for d in diags):
         # the logs hold no error: latexmk's own output may say what went wrong
         diags += [
@@ -2096,7 +2108,7 @@ def _run_latexmk(
         returncode, output = _run_captured(cmd, env, rc_input)
         if (
             returncode != 0
-            and not full
+            and execution.go_mode is GoMode.REBUILD
             and not clean
             and "gave an error in previous invocation" in output
         ):
