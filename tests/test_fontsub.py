@@ -117,7 +117,8 @@ def test_cli_substitution_file(tmp_path: Path) -> None:
     result = CliRunner().invoke(
         app,
         [
-            "substitute-font",
+            "pdf-fonts",
+            "substitute",
             str(src),
             pdffonts.find_type3(src)[0].name,
             "--font-file",
@@ -150,7 +151,7 @@ def test_unknown_is_not_reported_as_bitmap(tmp_path: Path) -> None:
     )
     fonts = pdffonts.classify(src)
     assert fonts[0].kind == "unknown"
-    result = CliRunner().invoke(app, ["fix-pdf", str(src), "-m", "outline"])
+    result = CliRunner().invoke(app, ["pdf-fonts", "outline", str(src)])
     assert "does not mean bitmap" in " ".join(result.output.split())
     assert "bitmap fonts cannot be converted" not in result.output
 
@@ -259,7 +260,8 @@ def test_failed_cli_substitution_does_not_create_backup(tmp_path: Path) -> None:
     result = CliRunner().invoke(
         app,
         [
-            "substitute-font",
+            "pdf-fonts",
+            "substitute",
             str(src),
             pdffonts.find_type3(src)[0].name,
             "--font-file",
@@ -366,7 +368,7 @@ def test_unused_empty_resource_cleanup_without_font_file(
     monkeypatch.setattr(fontsub, "find_font", no_lookup)
     out = tmp_path / "out.pdf"
     result = CliRunner().invoke(
-        app, ["substitute-font", str(src), name, "-o", str(out)]
+        app, ["pdf-fonts", "substitute", str(src), name, "-o", str(out)]
     )
     assert result.exit_code == 0, result.output
     assert "Removed unused empty font resource" in result.output
@@ -432,10 +434,11 @@ def test_content_name_lexer_skips_strings_and_comments() -> None:
 def test_outline_removes_unused_empty_resource(tmp_path: Path) -> None:
     src = make_pdf(tmp_path / "source.pdf", None)
     add_empty_font(src)
-    result = CliRunner().invoke(app, ["fix-pdf", str(src), "-m", "outline"])
+    result = CliRunner().invoke(app, ["pdf-fonts", "outline", str(src)])
     assert result.exit_code == 0, result.output
     assert "Removed unused empty font resource" in result.output
-    assert not pdffonts.find_type3(src.with_suffix(".fixed.pdf"))
+    assert not pdffonts.find_type3(src)
+    assert src.with_suffix(".pdf.bak").exists()
 
 
 def test_matplotlib_lookup_exact_and_deduplicates_cache(

@@ -6,7 +6,7 @@ Run `texi --help` for the list, and `texi COMMAND --help` for details on one com
 |---|---|---|
 | Project | `init`, `add`, `install`, `sync`, `outdated`, `scan`, `info`, `unused`, `list`, `tree`, `activate` | [Project setup](project.md) |
 | Build | `build`, `preview`, `clean` | [Build, preview, clean](build.md) |
-| Build | `fix-pdf`, `substitute-font` | [fix-pdf](fix-pdf.md) |
+| Build | `pdf-fonts check`, `pdf-fonts outline`, `pdf-fonts substitute` | [PDF fonts](pdf-fonts.md) |
 | Build | `fmt`, `export`, `build-tree` | [Format, export, build-tree](tools.md) |
 | TeX Live maintenance | `doctor`, `formats`, `updmap`, `mktexlsr`, `luaotfload` | [TeX Live maintenance](maintenance.md) |
 | Cache | `cache` (`stats`, `search`, `info`, `prune`) | [Cache](cache.md) |

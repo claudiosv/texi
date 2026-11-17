@@ -105,22 +105,23 @@ def test_bitmap_left_alone(bitmap_pdf: Path, tmp_path: Path) -> None:
 def test_suggestion_text() -> None:
     text = "\n".join(pdffonts.suggestion_text())
     assert "pdf.fonttype" in text
-    assert "cm-super" in text
-    assert "fix-pdf" in text
+    assert "cm-super" not in text
+    assert "cm-super" in "\n".join(pdffonts.suggestion_text(native_tex=True))
+    assert "pdf-fonts" in text
 
 
-def test_cli_advise(vector_pdf: Path) -> None:
-    result = CliRunner().invoke(app, ["fix-pdf", str(vector_pdf)])
-    assert result.exit_code == 0, result.output
+def test_cli_check(vector_pdf: Path) -> None:
+    result = CliRunner().invoke(app, ["pdf-fonts", "check", str(vector_pdf)])
+    assert result.exit_code == 1, result.output
     assert "Type 3" in result.output
     assert "vector" in result.output
-    assert "pdf.fonttype" in result.output
+    assert "pdf-fonts" in result.output
 
 
 def test_cli_outline(vector_pdf: Path, tmp_path: Path) -> None:
     out = tmp_path / "o.pdf"
     result = CliRunner().invoke(
-        app, ["fix-pdf", str(vector_pdf), "-m", "outline", "-o", str(out)]
+        app, ["pdf-fonts", "outline", str(vector_pdf), "-o", str(out)]
     )
     assert result.exit_code == 0, result.output
     assert pdffonts.find_type3(out) == []
@@ -129,14 +130,14 @@ def test_cli_outline(vector_pdf: Path, tmp_path: Path) -> None:
 def test_cli_outline_bitmap_fails(bitmap_pdf: Path, tmp_path: Path) -> None:
     result = CliRunner().invoke(
         app,
-        ["fix-pdf", str(bitmap_pdf), "-m", "outline", "-o", str(tmp_path / "o.pdf")],
+        ["pdf-fonts", "outline", str(bitmap_pdf), "-o", str(tmp_path / "o.pdf")],
     )
     assert result.exit_code == 1
 
 
 def test_cli_in_place(vector_pdf: Path) -> None:
     result = CliRunner().invoke(
-        app, ["fix-pdf", str(vector_pdf), "-m", "outline", "--in-place"]
+        app, ["pdf-fonts", "outline", str(vector_pdf), "--in-place"]
     )
     assert result.exit_code == 0, result.output
     assert pdffonts.find_type3(vector_pdf) == []
@@ -215,17 +216,18 @@ def test_warn_type3_missing_recorder(
     _warn_type3(vector_pdf, vector_pdf.with_suffix(".fls"))
     output = capsys.readouterr().out
     assert "Could not scan included PDFs" in output
-    assert "Run `texi fix-pdf`" in output
+    assert "Run `texi pdf-fonts check`" in output
 
 
 def test_cli_outline_multiple(vector_pdf: Path, bitmap_pdf: Path) -> None:
     result = CliRunner().invoke(
-        app, ["fix-pdf", str(bitmap_pdf), str(vector_pdf), "-m", "outline"]
+        app, ["pdf-fonts", "outline", str(bitmap_pdf), str(vector_pdf)]
     )
     assert result.exit_code == 1
-    assert vector_pdf.with_suffix(".fixed.pdf").is_file()
-    assert pdffonts.find_type3(vector_pdf.with_suffix(".fixed.pdf")) == []
-    assert bitmap_pdf.with_suffix(".fixed.pdf").is_file()
+    assert pdffonts.find_type3(vector_pdf) == []
+    assert vector_pdf.with_suffix(".pdf.bak").is_file()
+    assert pdffonts.find_type3(bitmap_pdf)
+    assert not bitmap_pdf.with_suffix(".pdf.bak").exists()
 
 
 def test_cli_multiple_rejects_output(
@@ -234,7 +236,7 @@ def test_cli_multiple_rejects_output(
     out = tmp_path / "out.pdf"
     result = CliRunner().invoke(
         app,
-        ["fix-pdf", str(vector_pdf), str(bitmap_pdf), "-m", "outline", "-o", str(out)],
+        ["pdf-fonts", "outline", str(vector_pdf), str(bitmap_pdf), "-o", str(out)],
     )
     assert result.exit_code != 0
     assert "exactly one PDF" in result.output
@@ -268,10 +270,11 @@ def test_cli_discover_confirmation(
         return accept
 
     monkeypatch.setattr(cli, "_confirm", confirm)
-    result = CliRunner().invoke(app, ["fix-pdf", "-m", "outline", "--in-place"])
+    result = CliRunner().invoke(app, ["pdf-fonts", "outline", "--in-place"])
     assert result.exit_code == 0, result.output
     assert prompts == ["Apply these changes?"]
-    assert "Files that would be changed" in result.output
+    assert "Will update 1 PDF" in result.output
+    assert "→" not in result.output
     assert vector_pdf.name in result.output
     assert plain_pdf.name not in result.output
     assert vector_pdf.with_suffix(".pdf.bak").exists() == accept

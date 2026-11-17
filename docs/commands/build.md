@@ -15,7 +15,7 @@ Compile the project to PDF with latexmk, using the settings in `texproject.toml`
 | `--rm-pdf` | Delete the old PDF first, so a failed build leaves none behind. |
 | `--debug` | Show every external command texi runs, along with its output. |
 
-After a successful build or preview, texi warns if the PDF contains Type 3 fonts (disable with `build.check_type3 = false`). See [fix-pdf](fix-pdf.md).
+After a successful build or preview, texi warns if the PDF contains Type 3 fonts (disable with `build.check_type3 = false`). See [PDF fonts](pdf-fonts.md).
 
 ### Build output
 

@@ -53,7 +53,7 @@ nav:
       - Overview: commands/index.md
       - Project setup: commands/project.md
       - Build, preview, clean: commands/build.md
-      - fix-pdf: commands/fix-pdf.md
+      - PDF fonts: commands/pdf-fonts.md
       - Format, export, build-tree: commands/tools.md
       - TeX Live maintenance: commands/maintenance.md
       - Cache: commands/cache.md

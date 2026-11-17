@@ -1,5 +1,6 @@
 import asyncio
 import getpass
+import hashlib
 import json
 import os
 import re
@@ -39,6 +40,7 @@ from texi import (
     logparse_bib,
     lsr,
     pdffonts,
+    pdffont_sources,
     runaway,
     texenv,
     texfmt,
@@ -84,6 +86,12 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=True,
 )
+pdf_fonts_app = typer.Typer(
+    help="Check PDF font sources, convert outlines, or substitute fonts.",
+    no_args_is_help=True,
+)
+app.add_typer(pdf_fonts_app, name="pdf-fonts", rich_help_panel="Build")
+
 DEBUG = False
 
 
@@ -1854,7 +1862,7 @@ def _warn_type3(pdf: Path, fls_path: Path | None = None) -> None:
     console.print(
         '[dim]  matplotlib: plt.rcParams["pdf.fonttype"] = 42 (then re-export the figure)[/dim]'
     )
-    console.print("[dim]  Run `texi fix-pdf` for options.[/dim]")
+    console.print("[dim]  Run `texi pdf-fonts check` for details.[/dim]")
 
 
 def _check_type3(config: TexProjectConfig) -> None:
@@ -2536,12 +2544,6 @@ def preview(
     )
 
 
-class FixMethod(StrEnum):
-    ADVISE = "advise"
-    OUTLINE = "outline"
-    REBUILD = "rebuild"
-
-
 def _print_type3_report(fonts: list[pdffonts.Type3Font]) -> None:
     for f in fonts:
         pages = ", ".join(map(str, f.pages[:15])) + (" …" if len(f.pages) > 15 else "")
@@ -2562,15 +2564,7 @@ def _print_type3_report(fonts: list[pdffonts.Type3Font]) -> None:
         )
 
 
-def _fix_outline(pdf: Path, output: Path | None, in_place: bool) -> None:
-    out = pdf.with_suffix(".fixed.pdf") if output is None else output
-    if in_place:
-        out = pdf.with_name(pdf.stem + ".texi-tmp.pdf")
-    report = pdffonts.convert_outlines(pdf, out)
-    if in_place:
-        shutil.copy2(pdf, pdf.with_suffix(pdf.suffix + ".bak"))
-        out.replace(pdf)
-        report.output = pdf
+def _print_outline_report(report: pdffonts.Report, *, written: bool = True) -> None:
     if report.converted:
         console.print(
             f"[green]✔ Converted {len(report.converted)} vector font(s) to TrueType: "
@@ -2589,161 +2583,236 @@ def _fix_outline(pdf: Path, output: Path | None, in_place: bool) -> None:
             "unknown": "unrecognized glyph drawing instructions; this does not mean bitmap",
         }.get(f.kind, f.kind)
         console.print(f"[yellow]Left alone: {escape(f.name)} ({escape(why)})[/yellow]")
-    console.print(f"[dim]Wrote {escape(str(report.output))}[/dim]")
+    if written:
+        console.print(f"[dim]Wrote {escape(str(report.output))}[/dim]")
     if report.remaining:
         console.print(f"[red]✖ {len(report.remaining)} Type 3 font(s) remain:[/red]")
         _print_type3_report(report.remaining)
-        for line in pdffonts.suggestion_text():
-            console.print(f"[dim]{escape(line)}[/dim]")
-        raise typer.Exit(code=1)
-    outro("[green]✔ No Type 3 fonts left[/green]")
 
 
-def _fix_rebuild(config: TexProjectConfig, pdf: Path) -> None:
+PdfFontPaths = Annotated[
+    list[Path] | None,
+    typer.Argument(help="PDFs to inspect. Default: the build recorder's PDF inputs."),
+]
+
+
+def _font_build_inputs(required: bool = False) -> pdffont_sources.BuildInputs | None:
+    project = Path.cwd()
+    if not required and not (project / "texproject.toml").is_file():
+        return None
+    config = load_project_config(project / "texproject.toml")
     try:
-        have_t1 = bool(tools.kpsewhich("sfrm1000.pfb"))  # cm-super's Type 1 fonts
-    except sh.ErrorReturnCode, sh.CommandNotFound:
-        have_t1 = False
-    if have_t1:
-        console.print("[green]✔ cm-super Type 1 fonts found[/green]")
-    else:
-        console.print(
-            "[yellow]cm-super Type 1 fonts not found. Install with: "
-            "texi add cm-super, and use "
-            f"{escape(chr(92) + 'usepackage[T1]{fontenc}')}.[/yellow]"
+        return pdffont_sources.BuildInputs.read(
+            project / config.build.aux_dir / f"{config.jobname}.fls",
+            _pdf_path(config),
+            project,
         )
-    console.print(f"[dim]pdf_mode is {config.build.pdf_mode.value}[/dim]")
-    _run_latexmk(strict=False, preview=False, raw=False)
-    fonts = pdffonts.classify(pdf) if pdf.is_file() else []
-    if fonts:
-        console.print(f"[red]✖ {len(fonts)} Type 3 font(s) remain:[/red]")
-        _print_type3_report(fonts)
-        raise typer.Exit(code=1)
-    console.print("[green]✔ No Type 3 fonts after rebuild[/green]")
-
-
-@app.command(
-    name="fix-pdf",
-    help="Find Type 3 fonts in PDFs (ACM rejects them) and fix or explain them.",
-    rich_help_panel="Build",
-)
-def fix_pdf(
-    pdfs: Annotated[
-        list[Path] | None,
-        typer.Argument(
-            help="PDFs to check. Default: PDF inputs from the build recorder (.fls)."
-        ),
-    ] = None,
-    method: Annotated[
-        FixMethod,
-        typer.Option(
-            "--method",
-            "-m",
-            help="advise: report and explain (default). outline: convert vector "
-            "Type 3 fonts to TrueType. rebuild: check TeX fonts and rebuild.",
-        ),
-    ] = FixMethod.ADVISE,
-    output: Annotated[
-        Path | None,
-        typer.Option(
-            "--output", "-o", help="Output for outline (default: <name>.fixed.pdf)."
-        ),
-    ] = None,
-    in_place: Annotated[
-        bool,
-        typer.Option(
-            "--in-place", help="outline: overwrite the PDF, keeping a .bak copy."
-        ),
-    ] = False,
-    debug: DebugOpt = False,
-) -> None:
-    """Detect Type 3 fonts and suggest or apply a fix."""
-    _intro("texi fix-pdf")
-    discovered = not pdfs
-    config = None
-    if discovered or method is FixMethod.REBUILD:
-        config = load_project_config(Path.cwd() / "texproject.toml")
-    if discovered:
-        assert config is not None
-        fls_path = Path.cwd() / config.build.aux_dir / f"{config.jobname}.fls"
-        try:
-            used_files, _ = latexmk_files.tree_used_paths(fls_path)
-        except OSError as e:
+    except OSError as e:
+        if required:
             console.print(
                 f"[red]Error:[/red] cannot read build recorder: {escape(str(e))}"
             )
             raise typer.Exit(code=1) from e
-        pdfs = sorted(
-            p
-            for p in used_files
-            if p.suffix.lower() == ".pdf" and p != _pdf_path(config).resolve()
-        )
-    assert pdfs is not None
-    pdfs = list(dict.fromkeys(p.resolve() for p in pdfs))
-    if output is not None and len(pdfs) != 1:
-        raise typer.BadParameter("--output requires exactly one PDF.")
-    reports: list[tuple[Path, list[pdffonts.Type3Font]]] = []
-    for pdf in pdfs:
+        return None
+
+
+def _pdf_font_paths(
+    pdfs: list[Path] | None,
+    *,
+    include_built: bool = False,
+) -> tuple[list[Path], pdffont_sources.BuildInputs | None]:
+    build = _font_build_inputs(required=not pdfs)
+    if not pdfs:
+        assert build is not None
+        pdfs = build.pdfs
+        if include_built and build.pdf.is_file():
+            pdfs = [build.pdf, *pdfs]
+    paths = list(dict.fromkeys(p.resolve() for p in pdfs))
+    if not paths:
+        console.print("[yellow]No PDF inputs recorded in the build.[/yellow]")
+    for pdf in paths:
         if not pdf.is_file():
             console.print(f"[red]Error:[/red] PDF not found: {escape(str(pdf))}")
             raise typer.Exit(code=1)
+    return paths, build
+
+
+def _pdf_display_path(path: Path) -> str:
+    return str(
+        path.relative_to(Path.cwd()) if path.is_relative_to(Path.cwd()) else path
+    )
+
+
+def _check_pdf_fonts(pdfs: list[Path] | None) -> None:
+    paths, build = _pdf_font_paths(pdfs, include_built=True)
+    sources = pdffont_sources.FontSources(build)
+    found = False
+    for pdf in paths:
         try:
             fonts = pdffonts.classify(pdf)
+            origins = sources.attribute(pdf, fonts) if fonts else {}
         except Exception as e:
             console.print(
                 f"[red]Error:[/red] cannot read {escape(str(pdf))}: {escape(str(e))}"
             )
             raise typer.Exit(code=1) from e
-        if fonts:
-            reports.append((pdf, fonts))
+        if not fonts:
             console.print(
-                f"[orange1]⚠ {len(fonts)} Type 3 font(s) in {escape(str(pdf))}:[/orange1]"
+                f"[green]✔ {escape(_pdf_display_path(pdf))}: no Type 3 fonts[/green]"
             )
-            _print_type3_report(fonts)
-    if not reports:
-        outro("[green]✔ No Type 3 fonts[/green]")
-        return
-    if method is FixMethod.ADVISE:
-        for line in pdffonts.suggestion_text():
-            console.print(f"[dim]{escape(line)}[/dim]")
-        return
-    if discovered:
-        console.print("[bold]Files that would be changed:[/bold]")
-        if method is FixMethod.REBUILD:
-            assert config is not None
-            console.print(f"  Rebuild project: {escape(str(_pdf_path(config)))}")
-        else:
-            for pdf, fonts in reports:
-                target = pdf if in_place else output or pdf.with_suffix(".fixed.pdf")
-                console.print(f"  {escape(str(pdf))} → {escape(str(target))}")
-                if in_place:
-                    console.print(
-                        f"    Backup: {escape(str(pdf.with_suffix('.pdf.bak')))}"
-                    )
-        if not _confirm("Apply these changes?"):
-            outro("Cancelled; no PDFs changed.")
-            return
-    if method is FixMethod.REBUILD:
-        assert config is not None
-        _fix_rebuild(config, _pdf_path(config))
-        return
-    failed = False
-    for pdf, _ in reports:
-        console.print(f"[bold]{escape(str(pdf))}[/bold]")
-        try:
-            _fix_outline(pdf, output, in_place)
-        except typer.Exit as e:
-            if e.exit_code != 1:
-                raise
-            failed = True
-    if failed:
+            continue
+        found = True
+        console.print(
+            f"[orange1]⚠ {len(fonts)} Type 3 font(s) in {escape(_pdf_display_path(pdf))}:[/orange1]"
+        )
+        for font in fonts:
+            _print_type3_report([font])
+            source = origins[font.xref]
+            files = ", ".join(_pdf_display_path(p) for p in source.files)
+            label = {
+                "native": "native TeX font",
+                "included": "included PDF",
+                "empty": "empty resource",
+                "unknown": "uncertain",
+            }[source.kind]
+            console.print(
+                f"[dim]  Source: {label}{': ' + escape(files) if files else ''}. {escape(source.reason)}.[/dim]"
+            )
+            for line in pdffont_sources.advice(source, font):
+                console.print(f"[dim]  {escape(line)}[/dim]")
+    if found:
         raise typer.Exit(code=1)
 
 
-@app.command(
-    name="substitute-font",
-    help="Replace a Type 3 PDF font using a font file, Font Book or matplotlib bundles.",
-    rich_help_panel="Build",
+def _confirm_pdf_changes(changes: list[tuple[Path, Path, str]], in_place: bool) -> bool:
+    base = Path(os.path.commonpath([str(src.parent) for src, _, _ in changes]))
+    count = len(changes)
+    console.print(
+        f"[bold]Will update {count} PDF{'s' if count != 1 else ''} in {escape(str(base))}[/bold]"
+    )
+    if in_place:
+        console.print("[dim]Backups: <filename>.bak[/dim]")
+    rows = Table.grid(padding=(0, 2))
+    for src, dst, action in changes:
+        label = str(src.relative_to(base))
+        if src != dst:
+            label += " → " + _pdf_display_path(dst)
+        rows.add_row(escape(label), escape(action))
+    console.print(rows)
+    return _confirm("Apply these changes?")
+
+
+def _outline_pdf_fonts(
+    pdfs: list[Path] | None, output: Path | None, in_place: bool
+) -> None:
+    discovered = not pdfs
+    paths, _ = _pdf_font_paths(pdfs)
+    if output is not None and len(paths) != 1:
+        raise typer.BadParameter("--output requires exactly one PDF.")
+    if output is not None:
+        in_place = False
+    staged: list[tuple[Path, Path, Path, pdffonts.Report, bytes]] = []
+    failed = False
+    try:
+        for pdf in paths:
+            target = pdf if in_place else output or pdf.with_suffix(".fixed.pdf")
+            target = target.resolve()
+            if not in_place and target == pdf:
+                raise typer.BadParameter(
+                    "Omit --output to update the input with a backup."
+                )
+            with tempfile.NamedTemporaryFile(
+                dir=target.parent, suffix=".pdf", delete=False
+            ) as temp:
+                temporary = Path(temp.name)
+            try:
+                original = hashlib.sha256(pdf.read_bytes()).digest()
+                report = pdffonts.convert_outlines(pdf, temporary)
+            except Exception as e:
+                temporary.unlink(missing_ok=True)
+                console.print(
+                    f"[red]Error:[/red] cannot convert {escape(str(pdf))}: {escape(str(e))}"
+                )
+                raise typer.Exit(code=1) from e
+            if report.remaining:
+                failed = True
+            if not report.converted and not report.removed:
+                temporary.unlink(missing_ok=True)
+                if report.remaining:
+                    console.print(
+                        f"[yellow]{escape(_pdf_display_path(pdf))}: no supported changes[/yellow]"
+                    )
+                    _print_outline_report(report, written=False)
+                continue
+            staged.append((pdf, target, temporary, report, original))
+        if discovered and staged:
+            changes = []
+            for pdf, target, _, report, _ in staged:
+                actions = []
+                glyphs = sum(len(f.glyph_kinds) for f in report.converted)
+                if report.converted:
+                    actions.append(f"{glyphs} glyphs to convert")
+                if report.removed:
+                    actions.append(f"remove {len(report.removed)} unused empty font(s)")
+                changes.append((pdf, target, "; ".join(actions)))
+            if not _confirm_pdf_changes(changes, in_place):
+                outro("Cancelled; no PDFs changed.")
+                return
+        for pdf, _, _, _, original in staged:
+            if hashlib.sha256(pdf.read_bytes()).digest() != original:
+                console.print(
+                    f"[red]Error:[/red] {escape(str(pdf))} changed during preparation; rerun the command."
+                )
+                raise typer.Exit(code=1)
+        for pdf, target, temporary, report, _ in staged:
+            if in_place:
+                shutil.copy2(pdf, pdf.with_suffix(pdf.suffix + ".bak"))
+                shutil.copymode(pdf, temporary)
+            temporary.replace(target)
+            report.output = target
+            console.print(f"[bold]{escape(_pdf_display_path(target))}[/bold]")
+            _print_outline_report(report)
+        if failed:
+            raise typer.Exit(code=1)
+        if paths:
+            outro("[green]✔ No Type 3 fonts left[/green]")
+    finally:
+        for _, _, temporary, _, _ in staged:
+            temporary.unlink(missing_ok=True)
+
+
+@pdf_fonts_app.command(
+    "check", help="Report Type 3 fonts, their build sources and appropriate fixes."
+)
+def pdf_fonts_check(pdfs: PdfFontPaths = None) -> None:
+    _intro("texi pdf-fonts check")
+    _check_pdf_fonts(pdfs)
+
+
+@pdf_fonts_app.command(
+    "outline",
+    help="Convert vector glyphs and remove unused empty fonts; in-place with .bak by default.",
+)
+def pdf_fonts_outline(
+    pdfs: PdfFontPaths = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Write a separate output (one PDF only)."),
+    ] = None,
+    in_place: Annotated[
+        bool,
+        typer.Option(
+            "--in-place/--no-in-place",
+            help="Overwrite inputs with .bak backups (default); --no-in-place writes .fixed.pdf files.",
+        ),
+    ] = True,
+) -> None:
+    _intro("texi pdf-fonts outline")
+    _outline_pdf_fonts(pdfs, output, in_place)
+
+
+@pdf_fonts_app.command(
+    "substitute", help="Substitute a Type 3 font; in-place with a .bak by default."
 )
 def substitute_font(
     pdf: Annotated[Path, typer.Argument(help="PDF to repair.")],
@@ -2760,24 +2829,23 @@ def substitute_font(
     ] = None,
     output: Annotated[
         Path | None,
-        typer.Option("--output", "-o", help="Default: <name>.substituted.pdf."),
+        typer.Option("--output", "-o", help="Write a separate output PDF."),
     ] = None,
     in_place: Annotated[
         bool,
         typer.Option(
-            "--in-place", help="Replace input after verification, keeping a .bak."
+            "--in-place/--no-in-place",
+            help="Replace input with a .bak (default); --no-in-place writes .substituted.pdf.",
         ),
-    ] = False,
+    ] = True,
 ) -> None:
     """Verify every glyph mapping and preserve PDF text advances and positions."""
-    _intro("texi substitute-font")
-    if in_place and output is not None:
-        raise typer.BadParameter("Use either --in-place or --output.")
+    _intro("texi pdf-fonts substitute")
+    if output is not None:
+        in_place = False
     target = output or pdf.with_suffix(".substituted.pdf")
     if target.resolve() == pdf.resolve():
-        raise typer.BadParameter(
-            "Use --in-place to overwrite the input PDF with a backup."
-        )
+        raise typer.BadParameter("Omit --output to update the input PDF with a backup.")
     temporary = None
     try:
         matches = fontsub.matching_fonts(pdf, font)
@@ -2797,6 +2865,7 @@ def substitute_font(
         if in_place:
             backup = pdf.with_suffix(pdf.suffix + ".bak")
             shutil.copy2(pdf, backup)
+            shutil.copymode(pdf, target)
             target.replace(pdf)
             target = pdf
         if count:
@@ -3448,7 +3517,6 @@ _ORDER = [
     "build",
     "clean",
     "preview",
-    "fix_pdf",
     "fmt",
     "export",
     "unused",

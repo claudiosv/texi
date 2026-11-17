@@ -26,7 +26,7 @@
 - [ ] Concurrent `texi` runs: building the tlpdb index, filling the archive store, and the hishel CTAN cache. No lock file.
 - [ ] SQLite without FTS5 or trigram (only simulated with `_FTS_ENABLED=False`).
 - [ ] Live `304 Not Modified` for the tlpdb download (mock only), and a real multi-hit CTAN disambiguation.
-- [ ] The `rebuild` method of `texi fix-pdf`, and the build and preview Type 3 warning hooks, against a real TeX build.
+- [ ] The `texi pdf-fonts check` source-attribution advice and build/preview Type 3 warning hooks against a real TeX build.
 - [ ] A real lualatex fixture for the `.fls`/`.fdb_latexmk` parsers, a real biber success run, and Windows paths.
 
 ## Roadmap (`docs/roadmap.md`)

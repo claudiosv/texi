@@ -21,7 +21,7 @@ Texi installs a minimal, standalone TeX Live tree for each LaTeX project, so no 
 - **Formatting.** `texi fmt` formats your `.tex` files with `tex-fmt`, using the `[tex-fmt]` settings in `texproject.toml`. `--check` only reports. tex-fmt's log is shown like build diagnostics, with clickable file and line.
 - **Exporting.** `texi export` converts the document to Markdown or HTML (pandoc, TeX4ht, LaTeXML), or `texi export expand` inlines every `\input` into one `.tex` file, for each file in `targets`.
 - **Live preview.** `texi preview` rebuilds on every change and reports diagnostics after each cycle.
-- **Venue checks.** After a build, texi warns about Type 3 fonts, which ACM rejects, and [`texi fix-pdf`](commands/fix-pdf.md) explains or repairs them.
+- **Venue checks.** After a build, texi warns about Type 3 fonts, which ACM rejects, and [`texi pdf-fonts`](commands/pdf-fonts.md) explains or repairs them.
 
 ## Install
 
