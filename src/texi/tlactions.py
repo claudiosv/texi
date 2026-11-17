@@ -11,7 +11,7 @@ subroutine each part mirrors.
 ====================================  ==========================================
 ``execute addMap|addMixedMap|addKanjiMap FILE``
     ``updmap.cfg`` gets ``Map|MixedMap|KanjiMap FILE``, then ``updmap-user``
-    (usertree) or ``updmap-sys`` (standalone tree) runs once.
+    (usertree) or ``updmap-sys`` (standalone tree) runs when needed.
 ``execute AddFormat name=... engine=...``
     ``fmtutil.cnf`` gets the format line, then ``fmtutil-user`` or
     ``fmtutil-sys`` builds the new formats, the formats of an updated engine and
@@ -40,8 +40,12 @@ the files where ``tlmgr`` does: ``texmf-dist/web2c/updmap.cfg``,
 ``texmf-dist/web2c/fmtutil.cnf`` and the language files in ``TEXMFSYSVAR``,
 generated from all packages of the tree.
 
-The entries come from the tree's ``tlpkg/texlive.tlpdb``, so running again gives
-the same files and removing a package removes its entries.
+The entries come from the tree's ``tlpkg/texlive.tlpdb``. Every sync reconciles
+these files, including partial installs and empty batches. Unfinished map,
+format, hyphenation, indexing and script work is saved before running tools in
+``tlpkg/texi-pending-actions.json`` and retried on later calls. Missing engines
+block only their formats; successful work is cleared individually. Removing a
+package removes its configuration entries and cancels obsolete format builds.
 
 Never calls ``tlmgr``. The ``updmap`` and ``fmtutil`` programs are still used.
 """
@@ -49,6 +53,7 @@ Never calls ``tlmgr``. The ``updmap`` and ``fmtutil`` programs are still used.
 from __future__ import annotations
 
 import os
+import json
 import re
 import shlex
 import shutil
@@ -480,6 +485,101 @@ class Outcome:
     written: list[Path] = field(default_factory=list)
 
 
+PENDING_FILE = "tlpkg/texi-pending-actions.json"
+
+
+@dataclass
+class _Pending:
+    """Durable work queue; configuration is always derived from today's tlpdb."""
+
+    maps: bool = False
+    format_config: bool = False
+    hyphens: bool = False
+    index: bool = False
+    formats: set[str] = field(default_factory=set)  # name/engine
+    changed: set[str] = field(default_factory=set)
+    new_formats: set[str] = field(default_factory=set)
+    scripts: list[tuple[str, str, str]] = field(default_factory=list)
+
+    @classmethod
+    def read(cls, root: Path) -> _Pending:
+        path = root / PENDING_FILE
+        if not path.exists():
+            return cls()
+        try:
+            data = json.loads(path.read_text())
+            if data.get("version") != 1:
+                raise ValueError("unsupported version")
+            flags = {
+                k: data.get(k, False)
+                for k in ("maps", "format_config", "hyphens", "index")
+            }
+            if any(type(v) is not bool for v in flags.values()):
+                raise ValueError("invalid action flags")
+            names = {k: data.get(k, []) for k in ("formats", "changed", "new_formats")}
+            if any(
+                not isinstance(v, list) or any(not isinstance(n, str) for n in v)
+                for v in names.values()
+            ):
+                raise ValueError("invalid action names")
+            if any(
+                ident.count("/") != 1 or not all(ident.split("/"))
+                for ident in names["formats"]
+            ):
+                raise ValueError("invalid format identities")
+            scripts = data.get("scripts", [])
+            if not isinstance(scripts, list) or any(
+                not isinstance(row, list)
+                or len(row) != 3
+                or any(not isinstance(v, str) for v in row)
+                or row[1] not in {"install", "remove"}
+                for row in scripts
+            ):
+                raise ValueError("invalid script actions")
+            return cls(
+                **flags,
+                **{k: set(v) for k, v in names.items()},
+                scripts=[tuple(row) for row in scripts],
+            )
+        except (ValueError, OSError, TypeError, AttributeError) as e:
+            raise ExecuteError(
+                f"Cannot read pending post-install actions in {path}: {e}"
+            ) from e
+
+    def save(self, root: Path) -> None:
+        path = root / PENDING_FILE
+        if not any((
+            self.maps,
+            self.format_config,
+            self.hyphens,
+            self.index,
+            self.formats,
+            self.changed,
+            self.new_formats,
+            self.scripts,
+        )):
+            path.unlink(missing_ok=True)
+            return
+        _write_atomic(
+            path,
+            json.dumps(
+                {
+                    "version": 1,
+                    "maps": self.maps,
+                    "format_config": self.format_config,
+                    "hyphens": self.hyphens,
+                    "index": self.index,
+                    "formats": sorted(self.formats),
+                    "changed": sorted(self.changed),
+                    "new_formats": sorted(self.new_formats),
+                    "scripts": self.scripts,
+                },
+                indent=2,
+            )
+            + "\n",
+        )
+
+
 # --- environment and files ----------------------------------------------------
 
 
@@ -542,6 +642,9 @@ class _Run:
         self.out = Outcome()
         self.suffix = "sys" if standalone else "user"
         self.tlpdb = self.root / "tlpkg" / "texlive.tlpdb"
+        self.pending: _Pending | None = None
+        self.hyphens_incomplete = False
+        self.variables: dict[str, str | None] = {}
 
     def warn(self, msg: str) -> None:
         self.out.warnings.append(msg)
@@ -576,11 +679,21 @@ class _Run:
         except OSError:
             return None
 
+    def available(self, tool: str) -> bool:
+        exe = shutil.which(tool, path=self.env.get("PATH"))
+        return exe is not None and (
+            not self.standalone or self.root in Path(exe).parents
+        )
+
     def kpse_var(self, var: str) -> str | None:
         """``kpsewhich -var-value=VAR`` (single-path values only)."""
-        r = self.run(["kpsewhich", f"-var-value={var}"])
-        value = r.stdout.strip() if r and r.returncode == 0 else ""
-        return value if value and not re.search(r"[{};:]", value) else None
+        if var not in self.variables:
+            r = self.run(["kpsewhich", f"-var-value={var}"])
+            value = r.stdout.strip() if r and r.returncode == 0 else ""
+            self.variables[var] = (
+                value if value and not re.search(r"[{};:]", value) else None
+            )
+        return self.variables[var]
 
     def kpse_file(self, name: str) -> str | None:
         """Where ``kpsewhich NAME`` finds a file."""
@@ -626,6 +739,15 @@ class _Run:
                 _write_atomic(dest.with_name(dest.name + ".backup"), old)
             if current == text:
                 return False
+        if self.pending is not None:
+            self.pending.index = True
+            if dest.name == "updmap.cfg":
+                self.pending.maps = True
+            elif dest.name == "fmtutil.cnf":
+                self.pending.format_config = True
+            else:
+                self.pending.hyphens = True
+            self.pending.save(self.root)
         _write_atomic(dest, (_stamp(comment_char) if stamp else "") + text)
         self.out.written.append(dest)
         return True
@@ -643,14 +765,14 @@ class _Run:
 # --- the actions ----------------------------------------------------------------
 
 
-def _update_maps(ctx: _Run, executes: Executes) -> None:
+def _update_maps(ctx: _Run, executes: Executes) -> bool:
     """``create_updmap`` and ``updmap-user|sys`` (tlmgr.pl ``handle_execute_actions``)."""
     if ctx.standalone:
         dest = ctx.root / "texmf-dist" / "web2c" / "updmap.cfg"
         header = ctx.root / "texmf-dist" / "web2c" / "updmap-hdr.cfg"
     else:
         dest, header = ctx.root / "web2c" / "updmap.cfg", None
-    ctx.write_config(dest, header, updmap_cfg_lines(executes), "#")
+    return ctx.write_config(dest, header, updmap_cfg_lines(executes), "#")
 
 
 #: ``(file, static header, comment char, line generator, local file extension)``.
@@ -686,7 +808,7 @@ def _language_files(ctx: _Run, executes: Executes) -> list[Path]:
     if ctx.standalone:
         head_root: Path | None = ctx.root
         entries = dict(executes)
-        gen_dir = Path(ctx.kpse_var("TEXMFSYSVAR") or ctx.root / "texmf-var")
+        gen_dir = Path(ctx.env.get("TEXMFSYSVAR", ctx.root / "texmf-var"))
     else:
         gen_dir = ctx.root / "texmf-var"
         if not any(
@@ -702,9 +824,11 @@ def _language_files(ctx: _Run, executes: Executes) -> list[Path]:
                     name == "language.def" and _DEF_TAIL[0] in text
                 ):
                     f.unlink()
+                    ctx.out.written.append(f)
             return [Path(p) for n in names if (p := ctx.kpse_file(n))]
         head_root = ctx.system_root()
         if head_root is None:
+            ctx.hyphens_incomplete = True
             ctx.warn(
                 "no system TeX Live found: language.dat, language.def and language.dat.lua not written"
             )
@@ -712,10 +836,15 @@ def _language_files(ctx: _Run, executes: Executes) -> list[Path]:
         entries = {**read_executes(head_root / "tlpkg" / "texlive.tlpdb"), **executes}
     gen_dir = gen_dir / "tex" / "generic" / "config"
     head_dir = head_root / "texmf-dist" / "tex" / "generic" / "config"
-    local_dir = ctx.texmflocal_config()
+    local_dir = (
+        ctx.root / "texmf-local/tex/generic/config"
+        if ctx.standalone
+        else ctx.texmflocal_config()
+    )
     written: list[Path] = []
     for name, head, cc, lines_of, ext in _LANGUAGE_FILES:
         if not (head_dir / head).is_file():
+            ctx.hyphens_incomplete = True
             ctx.warn(f"{head_dir / head} not found: {name} not written")
             continue
         local = local_dir / f"language-local.{ext}" if local_dir else None
@@ -739,19 +868,14 @@ def _language_files(ctx: _Run, executes: Executes) -> list[Path]:
     return written
 
 
-def _update_formats_cnf(ctx: _Run, executes: Executes) -> None:
+def _update_formats_cnf(ctx: _Run, executes: Executes) -> bool:
     """``create_fmtutil``."""
     if ctx.standalone:
         dest = ctx.root / "texmf-dist" / "web2c" / "fmtutil.cnf"
         header = ctx.root / "texmf-dist" / "web2c" / "fmtutil-hdr.cnf"
     else:
         dest, header = ctx.root / "web2c" / "fmtutil.cnf", None
-    try:
-        body = fmtutil_cnf_lines(executes)
-    except ExecuteError as e:
-        ctx.warn(f"fmtutil.cnf not updated: {e}")
-        return
-    ctx.write_config(dest, header, body, "#")
+    return ctx.write_config(dest, header, fmtutil_cnf_lines(executes), "#")
 
 
 def _tail(text: str, n: int = 12) -> str:
@@ -759,69 +883,95 @@ def _tail(text: str, n: int = 12) -> str:
 
 
 def _select_formats(
-    ctx: _Run, batch: Batch, executes: Executes, language: list[Path]
-) -> list[str]:
-    """The ``fmtutil`` selection of ``handle_execute_actions``.
+    definitions: dict[str, FormatDef],
+    local: set[str],
+    pending: _Pending,
+    language: list[Path],
+    *,
+    config_changed: bool,
+    hyphens_changed: bool,
+) -> dict[str, FormatDef]:
+    """Select explicit formats, including those affected by an engine or language update."""
+    engine_updates = {
+        f.engine
+        for f in definitions.values()
+        if f.name in pending.new_formats and f.name == f.engine
+    }
+    engine_updates.update(
+        f.engine
+        for f in definitions.values()
+        if any(
+            name == f.engine or name.startswith(f.engine + ".")
+            for name in pending.changed
+        )
+    )
+    language_names = {p.name for p in language}
+    selected = {}
+    for ident, f in definitions.items():
+        if not f.enabled:
+            continue
+        if (
+            ident in pending.formats
+            or f.name in pending.new_formats
+            or any(t in pending.changed for t in f.triggers)
+            or f.engine in engine_updates
+            or (config_changed and ident in local)
+            or (
+                hyphens_changed
+                and any(Path(p).name in language_names for p in f.patterns.split(","))
+            )
+        ):
+            selected[ident] = f
+    return selected
 
-    Formats of installed packages, formats built by an updated engine (a format
-    named like its engine) and formats whose ``fmttriggers`` name a changed
-    package (``check_announce_format_triggers``) are selected once each;
-    after a hyphenation change also the formats that read the language files.
-    """
-    enabled = dict(batch.new_formats)
-    try:
-        for _pkg, f in format_defs(executes):
-            if f.enabled and any(t in batch.changed for t in f.triggers):
-                enabled.setdefault(f.name, f)
-    except ExecuteError as e:
-        ctx.warn(f"formats not rebuilt: {e}")
-        return []
-    engines = {n for n, f in enabled.items() if f.name == f.engine}
-    select: list[str] = []
-    for e in sorted(engines):
-        select += ["--byengine", e]
-    for n in sorted(enabled):
-        if enabled[n].engine not in engines and enabled[n].enabled:
-            select += ["--byfmt", n]
-    if batch.hyphens:
-        for p in language:
-            select += ["--byhyphen", str(p)]
-    return select
 
-
-def _build_formats(ctx: _Run, select: list[str]) -> None:
-    """One ``fmtutil-user|sys`` run for everything selected; failures become warnings."""
+def _build_formats(ctx: _Run, selected: dict[str, FormatDef]) -> set[str]:
+    """Build ready formats once; return only work not confirmed successful."""
+    remaining = set(selected)
+    ready = {}
+    for ident, f in selected.items():
+        if ctx.available(f.engine):
+            ready[ident] = f
+        else:
+            ctx.warn(f"{f.engine} unavailable: deferred format {ident}")
+    if not ready:
+        ctx.out.failed_formats += sorted(remaining)
+        return remaining
     tool = f"fmtutil-{ctx.suffix}"
     fd, name = tempfile.mkstemp(prefix="texi-fmtutil-", suffix=".status")
     os.close(fd)
     status = Path(name)
     try:
-        cmd = [
-            tool,
-            *select,
-            f"--no-error-if-no-engine={PARTIAL_ENGINES}",
-            f"--status-file={status}",
-        ]
-        if read_installation_option(ctx.tlpdb, "create_formats") == "0":
-            cmd.append("--refresh")  # only rebuild formats that exist
+        cmd = [tool]
+        for name in sorted({f.name for f in ready.values()}):
+            cmd += ["--byfmt", name]
+        cmd += [f"--no-error-if-no-engine={PARTIAL_ENGINES}", f"--status-file={status}"]
+        refresh = read_installation_option(ctx.tlpdb, "create_formats") == "0"
+        if refresh:
+            cmd.append("--refresh")
         r = ctx.run(cmd)
         if r is None:
-            ctx.warn(f"{tool} not found: formats not built")
-            return
-        failed = []
-        for line in status.read_text(encoding="utf-8", errors="replace").splitlines():
-            parts = line.split()
-            if len(parts) >= 3 and parts[0] == "FAILURE":
-                failed.append(f"{parts[1]}/{parts[2]}")
-        if r.returncode != 0 and not failed:
-            failed = ["(see output)"]
-        ctx.out.failed_formats += failed
-        if failed:
-            ctx.warn(
-                f"{tool} could not build {', '.join(failed)}:\n{_tail(r.stdout + chr(10) + r.stderr)}"
-            )
+            ctx.warn(f"{tool} not found: formats deferred")
+        else:
+            for line in status.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines():
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                ident = f"{parts[1]}/{parts[2]}"
+                if ident in ready and (
+                    parts[0] == "SUCCESS" or (refresh and parts[0] == "NOTSELECTED")
+                ):
+                    remaining.discard(ident)
+            if remaining:
+                ctx.warn(
+                    f"{tool} could not build {', '.join(sorted(remaining))}:\n{_tail(r.stdout + chr(10) + r.stderr)}"
+                )
     finally:
         status.unlink(missing_ok=True)
+    ctx.out.failed_formats += sorted(remaining)
+    return remaining
 
 
 def _run_updmap(ctx: _Run) -> None:
@@ -837,11 +987,16 @@ def _run_updmap(ctx: _Run) -> None:
         )
 
 
-def _run_scripts(ctx: _Run, batch: Batch) -> None:
+def _run_scripts(ctx: _Run, pending: _Pending) -> None:
     """``TLUtils::_do_postaction_script``; trees with a ``bin`` only (a usertree has no ``tlpkg/tlpostcode``)."""
-    for pkg, how, file in batch.scripts:
+    for pkg, how, file in list(pending.scripts):
         path = ctx.root / file
-        if not ctx.standalone or not path.is_file():
+        if not ctx.standalone:
+            pending.scripts.remove((pkg, how, file))
+            pending.save(ctx.root)
+            continue
+        if not path.is_file():
+            ctx.warn(f"postaction script {file} of {pkg} is missing; deferred")
             continue
         if file.lower().endswith(".pl"):
             cmd = ["perl", str(path)]
@@ -851,7 +1006,10 @@ def _run_scripts(ctx: _Run, batch: Batch) -> None:
             cmd = [str(path)]
         r = ctx.run([*cmd, how, str(ctx.root)])
         if r is None or r.returncode != 0:
-            ctx.warn(f"postaction script {file} of {pkg} did not succeed")
+            ctx.warn(f"postaction script {file} of {pkg} did not succeed; deferred")
+        else:
+            pending.scripts.remove((pkg, how, file))
+            pending.save(ctx.root)
 
 
 def _lsr_targets(root: Path, standalone: bool) -> list[Path]:
@@ -861,15 +1019,18 @@ def _lsr_targets(root: Path, standalone: bool) -> list[Path]:
     return [root / d for d in ("texmf-dist", "texmf-var", "texmf-local")]
 
 
-def _index(ctx: _Run, trees: list[Path]) -> None:
+def _index(ctx: _Run, trees: list[Path]) -> bool:
     """Write the ``ls-R`` files (texi's own ``mktexlsr``); failures become warnings."""
     ctx.log("writing ls-R in " + ", ".join(map(str, trees)))
+    success = True
     for tree in trees:
         try:
             if tree.is_dir():
                 lsr.write(tree)
         except lsr.LsrError as e:
+            success = False
             ctx.warn(str(e))
+    return success
 
 
 def run(
@@ -885,8 +1046,10 @@ def run(
 
     Writes the configuration files from ``env_dir/tlpkg/texlive.tlpdb`` (so call
     it after the tlpdb was written), writes the ``ls-R`` files itself, runs ``updmap-user|sys`` and
-    one ``fmtutil-user|sys``. Missing programs and failed builds are reported as
-    warnings; nothing is raised for them.
+    one ``fmtutil-user|sys`` for ready formats. Missing programs and failed
+    builds are reported as warnings and retained for the next call, including
+    calls with an empty batch. Configuration is reconciled on every call.
+    A malformed pending-work file raises ExecuteError instead of losing work.
 
     Parameters
     ----------
@@ -909,33 +1072,113 @@ def run(
         Commands run, warnings and formats that failed.
     """
     ctx = _Run(env_dir, standalone, arch, notice, log)
-    for p in batch.problems:
-        ctx.warn(p)
-    if batch.empty and not batch.changed:
-        return ctx.out
+    pending = _Pending.read(ctx.root)
+    ctx.pending = pending
+    try:
+        installed = set(
+            re.findall(
+                r"^name (\S+)$",
+                ctx.tlpdb.read_text(encoding="utf-8", errors="replace"),
+                re.M,
+            )
+        )
+    except OSError as e:
+        raise ExecuteError(f"Cannot reconcile installed package actions: {e}") from e
+    pending.scripts = [
+        item for item in pending.scripts if item[1] != "install" or item[0] in installed
+    ]
+    pending.maps |= batch.maps
+    pending.format_config |= batch.formats
+    pending.hyphens |= batch.hyphens
+    pending.index |= bool(batch.changed)
+    pending.changed.update(batch.changed)
+    pending.new_formats.update(batch.new_formats)
+    pending.scripts = list(dict.fromkeys([*pending.scripts, *batch.scripts]))
+    pending.save(ctx.root)  # Persist intent before generating files or running tools.
+    for problem in batch.problems:
+        ctx.warn(problem)
+    executes = read_executes(ctx.tlpdb)
+    config_dir = ctx.root / ("texmf-dist/web2c" if standalone else "web2c")
+    maps_ready = True
+    maps = updmap_cfg_lines(executes)
+    if maps or pending.maps or (config_dir / "updmap.cfg").exists():
+        try:
+            changed = _update_maps(ctx, executes)
+        except (OSError, ExecuteError) as e:
+            maps_ready = False
+            pending.maps = True
+            ctx.warn(f"updmap.cfg not updated: {e}")
+        else:
+            pending.maps |= changed or bool(
+                maps
+                and not (
+                    ctx.root / "texmf-var/fonts/map/pdftex/updmap/pdftex.map"
+                ).is_file()
+            )
+    hyphens_retry = pending.hyphens
+    before_language = len(ctx.out.written)
+    language: list[Path] = []
+    has_hyphens = any(
+        _kind(e) == "AddHyphen" for lines in executes.values() for e in lines
+    )
     if (
         standalone
-        and not (
-            ctx.root / "texmf-var" / "tex" / "generic" / "config" / "language.def"
-        ).is_file()
+        or has_hyphens
+        or pending.hyphens
+        or any(
+            (ctx.root / "texmf-var/tex/generic/config" / n).exists()
+            for n, *_ in _LANGUAGE_FILES
+        )
     ):
-        # hyphen-base ships a language.def that lists every language of TeX Live;
-        # until ours shadows it, formats fail on the patterns that are not installed
-        batch.hyphens = True
-    executes = read_executes(ctx.tlpdb)
-    language: list[Path] = []
-    if batch.maps:
-        _update_maps(ctx, executes)
-    if batch.hyphens:
-        language = _language_files(ctx, executes)
-    if batch.formats:
-        _update_formats_cnf(ctx, executes)
-    select = _select_formats(ctx, batch, executes, language)
-    if batch.maps or batch.formats or batch.hyphens or select:
-        _index(ctx, _lsr_targets(ctx.root, standalone))
-    if batch.maps:
-        _run_updmap(ctx)
-    if select:
-        _build_formats(ctx, select)
-    _run_scripts(ctx, batch)
+        try:
+            language = _language_files(ctx, executes)
+            pending.hyphens = ctx.hyphens_incomplete
+        except (OSError, ExecuteError) as e:
+            pending.hyphens = True
+            ctx.warn(f"hyphenation configuration not updated: {e}")
+    hyphens_changed = hyphens_retry or len(ctx.out.written) != before_language
+    formats_retry = pending.format_config
+    formats_changed = False
+    try:
+        local_defs = {f"{f.name}/{f.engine}": f for _, f in format_defs(executes)}
+        definitions = dict(local_defs)
+        if not standalone and (has_hyphens or pending.hyphens or pending.formats):
+            if system := ctx.system_root():
+                combined = {**read_executes(system / "tlpkg/texlive.tlpdb"), **executes}
+                definitions = {
+                    f"{f.name}/{f.engine}": f for _, f in format_defs(combined)
+                }
+        if local_defs or pending.format_config or (config_dir / "fmtutil.cnf").exists():
+            formats_changed = _update_formats_cnf(ctx, executes)
+        pending.format_config = False
+        selected = _select_formats(
+            definitions,
+            set(local_defs),
+            pending,
+            language,
+            config_changed=formats_changed or formats_retry,
+            hyphens_changed=hyphens_changed,
+        )
+        pending.formats = set(selected)
+        pending.changed.clear()
+        pending.new_formats.clear()
+    except (OSError, ExecuteError) as e:
+        pending.format_config = True
+        selected = {}
+        ctx.warn(f"format configuration not updated: {e}")
+    pending.index |= bool(ctx.out.written)
+    pending.save(ctx.root)
+    if pending.index:
+        pending.index = not _index(ctx, _lsr_targets(ctx.root, standalone))
+        pending.save(ctx.root)
+    if not pending.index:
+        if pending.maps and maps_ready:
+            _run_updmap(ctx)
+            pending.maps = ctx.out.maps_failed
+            pending.save(ctx.root)
+        if selected:
+            pending.formats = _build_formats(ctx, selected)
+            pending.save(ctx.root)
+    _run_scripts(ctx, pending)
+    pending.save(ctx.root)
     return ctx.out

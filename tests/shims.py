@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -18,6 +19,41 @@ printf '%s|%s|TEXMFHOME=%s TEXMFVAR=%s TEXMFCONFIG=%s\\n' "{tool}" "$*" \\
   "$TEXMFHOME" "$TEXMFVAR" "$TEXMFCONFIG" >> "$SHIM_LOG"
 exit ${{SHIM_EXIT_{tool.replace("-", "_")}:-0}}
 """
+
+
+def _fmtutil(tool: str) -> str:
+    return f"""#!{sys.executable}
+import os, pathlib, sys
+args = sys.argv[1:]
+with open(os.environ['SHIM_LOG'], 'a') as log:
+    log.write('{tool}|' + ' '.join(args) + '|TEXMFHOME=' + os.environ.get('TEXMFHOME', '') + ' TEXMFVAR=' + os.environ.get('TEXMFVAR', '') + ' TEXMFCONFIG=' + os.environ.get('TEXMFCONFIG', '') + '\\n')
+code = int(os.environ.get('SHIM_EXIT_{tool.replace("-", "_")}', '0'))
+selected = {{args[i+1] for i, value in enumerate(args[:-1]) if value == '--byfmt'}}
+status = next((a.split('=', 1)[1] for a in args if a.startswith('--status-file=')), None)
+if status:
+    override = dict(item.split('=', 1) for item in os.environ.get('SHIM_FMT_STATUSES', '').split(',') if item)
+    for root in [os.environ.get('TEXMFDIST'), os.environ.get('TEXMFHOME')]:
+        if not root: continue
+        cnf = pathlib.Path(root) / 'web2c/fmtutil.cnf'
+        if not cnf.exists(): continue
+        for line in cnf.read_text().splitlines():
+            parts = line.split()
+            if len(parts) < 2 or parts[0] not in selected: continue
+            name, engine = parts[:2]
+            state = override.get(name, 'FAILURE' if code else 'SUCCESS')
+            with open(status, 'a') as output: output.write(state + ' ' + name + ' ' + engine + '\\n')
+sys.exit(code)
+"""
+
+
+def _updmap(tool: str) -> str:
+    script = _recorder(tool)
+    return script.replace(
+        "exit $",
+        'if [ "${SHIM_EXIT_'
+        + tool.replace("-", "_")
+        + ':-0}" = "0" ]; then\nmkdir -p "$TEXMFVAR/fonts/map/pdftex/updmap"\necho "% generated" > "$TEXMFVAR/fonts/map/pdftex/updmap/pdftex.map"\nfi\nexit $',
+    )
 
 
 _KPSEWHICH = """#!/bin/sh
@@ -74,7 +110,15 @@ def install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Shims:
         "fmtutil-user",
         "fmtutil-sys",
     ):
-        script(tool, _recorder(tool))
+        script(
+            tool,
+            _fmtutil(tool)
+            if tool.startswith("fmtutil")
+            else _updmap(tool)
+            if tool.startswith("updmap")
+            else _recorder(tool),
+        )
+    script("pdftex", _recorder("pdftex"))
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.setenv("SHIM_LOG", str(log))
     return Shims(log)

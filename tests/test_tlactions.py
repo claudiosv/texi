@@ -346,11 +346,9 @@ def test_addhyphen_generates_language_files(
     ) in lua.replace("-- from", "-- from") or "['xx'] = {" in lua
     assert "\t\thyphenation = '',\n\t\tspecial = 'disabled:no patterns',\n" in lua
     assert lua.endswith("}\n")
-    # one fmtutil run, selecting the format and the three language files
+    # One fmtutil run selects the explicit formats affected by language files.
     calls = shims.calls("fmtutil-user")
     assert len(calls) == 1
-    for name in ("language.dat", "language.def", "language.dat.lua"):
-        assert f"--byhyphen {gen / name}" in calls[0][1]
     assert "--byfmt myfmt" in calls[0][1]
 
 
@@ -519,3 +517,293 @@ def test_windows_postactions_are_ignored_silently(tmp_path: Path, shims) -> None
     assert b.scripts == []
     b.note("p", "install", ["frob it"], ["bogus x=1"])
     assert len(b.problems) == 2
+
+
+# --- recovery and reconciliation -------------------------------------------
+
+
+def standalone_env(tmp_path: Path) -> Path:
+    import shutil
+
+    env = new_env(tmp_path)
+    tools = env / "bin" / ARCH
+    tools.mkdir(parents=True)
+    for name in ("updmap-sys", "fmtutil-sys", "pdftex", "kpsewhich"):
+        shutil.copy2(shutil.which(name), tools / name)
+    heads = env / "texmf-dist/tex/generic/config"
+    heads.mkdir(parents=True)
+    (heads / "language.us").write_text("% English\n")
+    (heads / "language.us.def").write_text("% English\n")
+    (heads / "language.us.lua").write_text("return {\n")
+    return env
+
+
+def pending(env: Path) -> dict:
+    import json
+
+    return json.loads((env / tlactions.PENDING_FILE).read_text())
+
+
+def test_partial_standalone_install_runs_successful_font_actions(
+    tmp_path: Path, shims
+) -> None:
+    env = standalone_env(tmp_path)
+
+    def handler(request):
+        name = request.url.path.rsplit("/", 1)[-1].removesuffix(".tar.xz")
+        return (
+            httpx2.Response(404)
+            if name == "trig"
+            else httpx2.Response(200, content=BLOBS[name])
+        )
+
+    result = archive.install_packages(
+        tlpdb.parse_tlpdb(db_text()),
+        REPO,
+        ["fontpkg", "trig"],
+        env,
+        standalone=True,
+        arch=ARCH,
+        client=httpx2.Client(transport=httpx2.MockTransport(handler)),
+    )
+    assert result.failed == ["trig"]
+    assert result.installed == ["fontpkg"]
+    assert "Map f.map" in (env / "texmf-dist/web2c/updmap.cfg").read_text()
+    assert len(shims.calls("updmap-sys")) == 1
+    assert not result.actions.maps_failed
+    assert not (env / tlactions.PENDING_FILE).exists()
+
+
+def test_noop_sync_repairs_stale_maps_and_then_stays_quiet(
+    tmp_path: Path, shims
+) -> None:
+    env = standalone_env(tmp_path)
+    install(env, ["fontpkg"], standalone=True)
+    cfg = env / "texmf-dist/web2c/updmap.cfg"
+    cfg.write_text("# Old clone config\n")
+    before = len(shims.calls("updmap-sys"))
+    result = install(env, ["fontpkg"], standalone=True)
+    assert result.installed == [] and result.present == ["fontpkg"]
+    assert "Map f.map" in cfg.read_text()
+    assert len(shims.calls("updmap-sys")) == before + 1
+    mtime = cfg.stat().st_mtime_ns
+    result = install(env, ["fontpkg"], standalone=True)
+    assert result.actions.ran == []
+    assert cfg.stat().st_mtime_ns == mtime
+    assert len(shims.calls("updmap-sys")) == before + 1
+
+
+def test_missing_standalone_updmap_retries_without_system_fallback(
+    tmp_path: Path, shims
+) -> None:
+    import shutil
+
+    env = standalone_env(tmp_path)
+    tool = env / "bin" / ARCH / "updmap-sys"
+    tool.unlink()
+    result = install(env, ["fontpkg"], standalone=True)
+    assert result.actions.maps_failed
+    assert pending(env)["maps"]
+    assert shims.calls("updmap-sys") == []
+    assert (env / "texmf-dist/web2c/updmap.cfg").is_file()
+    shutil.copy2(shutil.which("updmap-sys"), tool)
+    result = install(env, ["fontpkg"], standalone=True)
+    assert result.installed == []
+    assert not result.actions.maps_failed
+    assert len(shims.calls("updmap-sys")) == 1
+    assert not (env / tlactions.PENDING_FILE).exists()
+
+
+def test_failed_updmap_retries_on_noop(
+    tmp_path: Path, shims, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = new_env(tmp_path)
+    monkeypatch.setenv("SHIM_EXIT_updmap_user", "1")
+    assert install(env, ["fontpkg"]).actions.maps_failed
+    assert pending(env)["maps"]
+    monkeypatch.delenv("SHIM_EXIT_updmap_user")
+    result = install(env, ["fontpkg"])
+    assert result.installed == []
+    assert not result.actions.maps_failed
+    assert len(shims.calls("updmap-user")) == 2
+    assert not (env / tlactions.PENDING_FILE).exists()
+
+
+@pytest.mark.parametrize("missing", ["pdftex", "fmtutil-sys"])
+def test_missing_format_prerequisite_defers_only_formats_and_retries(
+    tmp_path: Path, shims, missing: str
+) -> None:
+    import shutil
+
+    env = standalone_env(tmp_path)
+    tool = env / "bin" / ARCH / missing
+    tool.unlink()
+    result = install(env, ["fontpkg", "fmtpkg"], standalone=True)
+    assert len(shims.calls("updmap-sys")) == 1
+    assert shims.calls("fmtutil-sys") == []
+    assert result.actions.failed_formats == ["myfmt/pdftex"]
+    assert pending(env)["formats"] == ["myfmt/pdftex"]
+    assert not pending(env)["maps"]
+    shutil.copy2(shutil.which(missing), tool)
+    result = install(env, ["fontpkg", "fmtpkg"], standalone=True)
+    assert result.installed == []
+    assert result.actions.failed_formats == []
+    assert len(shims.calls("fmtutil-sys")) == 1
+    assert len(shims.calls("updmap-sys")) == 1
+    assert not (env / tlactions.PENDING_FILE).exists()
+
+
+def test_format_status_controls_retry_even_with_zero_exit(
+    tmp_path: Path, shims, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = new_env(tmp_path)
+    text = db_text().replace(
+        "execute AddFormat name=off",
+        'execute AddFormat name=good engine=pdftex options="*my.ini"\nexecute AddFormat name=off',
+    )
+    monkeypatch.setenv("SHIM_FMT_STATUSES", "myfmt=NOTAVAIL")
+    result = archive.install_packages(
+        tlpdb.parse_tlpdb(text), REPO, ["fmtpkg"], env, client=client(), arch=ARCH
+    )
+    assert result.actions.failed_formats == ["myfmt/pdftex"]
+    assert pending(env)["formats"] == ["myfmt/pdftex"]
+    monkeypatch.delenv("SHIM_FMT_STATUSES")
+    result = install(env, ["fmtpkg"])
+    assert not result.actions.failed_formats
+    assert "--byfmt myfmt" in shims.calls("fmtutil-user")[-1][1]
+    assert "--byfmt good" not in shims.calls("fmtutil-user")[-1][1]
+    assert not (env / tlactions.PENDING_FILE).exists()
+
+
+def test_hyphenation_configuration_retries_when_heads_become_available(
+    tmp_path: Path, shims, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = new_env(tmp_path)
+    install(env, ["hyphen-xx"])
+    assert pending(env)["hyphens"]
+    system_tree(tmp_path, monkeypatch)
+    result = install(env, ["hyphen-xx"])
+    assert result.installed == []
+    assert (
+        "xx loadhyph-xx.tex"
+        in (env / "texmf-var/tex/generic/config/language.dat").read_text()
+    )
+    assert not (env / tlactions.PENDING_FILE).exists()
+
+
+def test_map_config_failure_does_not_run_old_maps_or_block_formats(
+    tmp_path: Path, shims, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = new_env(tmp_path)
+    write = tlactions._write_atomic
+
+    def fail_map(path, text):
+        if path.name == "updmap.cfg":
+            raise OSError("map config unavailable")
+        return write(path, text)
+
+    monkeypatch.setattr(tlactions, "_write_atomic", fail_map)
+    install(env, ["fontpkg", "fmtpkg"])
+    assert shims.calls("updmap-user") == []
+    assert len(shims.calls("fmtutil-user")) == 1
+    assert pending(env)["maps"]
+    monkeypatch.setattr(tlactions, "_write_atomic", write)
+    install(env, ["fontpkg", "fmtpkg"])
+    assert len(shims.calls("updmap-user")) == 1
+    assert len(shims.calls("fmtutil-user")) == 1
+    assert not (env / tlactions.PENDING_FILE).exists()
+
+
+def test_crash_after_reconciling_format_config_keeps_work(
+    tmp_path: Path, shims, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = new_env(tmp_path)
+    install(env, ["fmtpkg"])
+    (env / "web2c/fmtutil.cnf").write_text("# stale\n")
+    write = tlactions._write_atomic
+
+    def crash(path, text):
+        write(path, text)
+        if path.name == "fmtutil.cnf":
+            raise KeyboardInterrupt("simulated interruption")
+
+    monkeypatch.setattr(tlactions, "_write_atomic", crash)
+    with pytest.raises(KeyboardInterrupt):
+        install(env, ["fmtpkg"])
+    assert pending(env)["format_config"]
+    assert len(shims.calls("fmtutil-user")) == 1
+    monkeypatch.setattr(tlactions, "_write_atomic", write)
+    install(env, ["fmtpkg"])
+    assert len(shims.calls("fmtutil-user")) == 2
+    assert not (env / tlactions.PENDING_FILE).exists()
+
+
+def test_removed_format_cancels_pending_build(tmp_path: Path, shims) -> None:
+    env = standalone_env(tmp_path)
+    (env / "bin" / ARCH / "pdftex").unlink()
+    install(env, ["fmtpkg"], standalone=True)
+    assert pending(env)["formats"] == ["myfmt/pdftex"]
+    archive.uninstall(env, "fmtpkg", standalone=True, arch=ARCH)
+    assert not (env / tlactions.PENDING_FILE).exists()
+    assert not shims.calls("fmtutil-sys")
+
+
+def test_failed_postaction_retries_once_then_is_not_repeated(
+    tmp_path: Path, shims, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = standalone_env(tmp_path)
+    script = env / "tlpkg/tlpostcode/example.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text(
+        '#!/bin/sh\necho run >> "$2/script-runs"\nexit "${POSTACTION_FAIL:-0}"\n'
+    )
+    script.chmod(0o755)
+    with (env / "tlpkg/texlive.tlpdb").open("a") as db:
+        db.write("name example\ncategory Package\nrevision 1\n\n")
+    batch = tlactions.Batch()
+    batch.note("example", "install", [], ["script file=tlpkg/tlpostcode/example.sh"])
+    monkeypatch.setenv("POSTACTION_FAIL", "1")
+    tlactions.run(env, standalone=True, batch=batch, arch=ARCH)
+    assert pending(env)["scripts"] == [
+        ["example", "install", "tlpkg/tlpostcode/example.sh"]
+    ]
+    monkeypatch.delenv("POSTACTION_FAIL")
+    tlactions.run(env, standalone=True, batch=tlactions.Batch(), arch=ARCH)
+    assert not (env / tlactions.PENDING_FILE).exists()
+    tlactions.run(env, standalone=True, batch=tlactions.Batch(), arch=ARCH)
+    assert (env / "script-runs").read_text().splitlines() == ["run", "run"]
+
+
+def test_corrupt_pending_actions_are_not_silently_discarded(
+    tmp_path: Path, shims
+) -> None:
+    env = new_env(tmp_path)
+    path = env / tlactions.PENDING_FILE
+    path.write_text("not JSON")
+    with pytest.raises(tlactions.ExecuteError, match="Cannot read pending"):
+        tlactions.run(env, standalone=False, batch=tlactions.Batch())
+    assert path.read_text() == "not JSON"
+
+
+def test_sync_without_dependencies_still_retries_pending_actions(
+    tmp_path: Path,
+    shims,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from texi import cli
+    from texi.config import ProjectConfig
+
+    env = new_env(tmp_path)
+    monkeypatch.setenv("SHIM_EXIT_updmap_user", "1")
+    install(env, ["fontpkg"])
+    assert pending(env)["maps"]
+    monkeypatch.delenv("SHIM_EXIT_updmap_user")
+    monkeypatch.chdir(env.parent)
+
+    def no_latexmk():
+        raise AssertionError("Pending font maps do not require latexmk")
+
+    monkeypatch.setattr(cli, "_ensure_latexmk", no_latexmk)
+    cli._sync_archive(ProjectConfig(), [], no_upgrade=True, keep=None)
+    assert len(shims.calls("updmap-user")) == 2
+    assert not (env / tlactions.PENDING_FILE).exists()

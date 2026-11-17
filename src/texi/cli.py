@@ -41,6 +41,7 @@ from texi import (
     lsr,
     pdffonts,
     pdffont_sources,
+    tlactions,
     runaway,
     texenv,
     texfmt,
@@ -1336,12 +1337,19 @@ def _sync_archive(
     env_dir = Path.cwd() / ".texenv"
     standalone = _standalone(env_dir)
     plural = inflect_engine.plural
-    _ensure_latexmk()
     if not packages:
         console.print(
-            "[yellow]No dependencies found in texproject.toml. Nothing to sync.[/yellow]"
+            "[yellow]No dependencies found in texproject.toml; checking installed package actions.[/yellow]"
+        )
+        tlactions.run(
+            env_dir,
+            standalone=standalone,
+            batch=tlactions.Batch(),
+            arch=_target_arch(env_dir),
+            notice=lambda message: console.print(f"[yellow]{escape(message)}[/yellow]"),
         )
         return
+    _ensure_latexmk()
     n = len(packages)
     console.print(
         f"[blue]Syncing {n} {plural('package', n)}:[/blue]\n"
@@ -2951,7 +2959,8 @@ def build_tree(
     bib: Annotated[
         bool,
         typer.Option(
-            "--bib", help="Only list the .bib files the build read (also outside the project)."
+            "--bib",
+            help="Only list the .bib files the build read (also outside the project).",
         ),
     ] = False,
 ) -> None:
@@ -3017,7 +3026,9 @@ def build_tree(
     root = project_dir.resolve()
     outside = [p for p in bibs if root not in p.parents]
     if outside:
-        branch = tree.add("[bold magenta]:open_file_folder: outside project (.bib only)")
+        branch = tree.add(
+            "[bold magenta]:open_file_folder: outside project (.bib only)"
+        )
         for p in outside:
             name = Text(str(p), "green")
             name.stylize(f"link file://{p}")

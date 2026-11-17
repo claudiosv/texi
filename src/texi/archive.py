@@ -969,7 +969,9 @@ def install_packages(
     After the tlpdb is written, :func:`texi.tlactions.run` does the
     ``execute``/``postaction`` work once for the whole batch (font maps, format
     and hyphenation files and the builds that follow); its warnings go through
-    ``notice`` and the outcome is in :attr:`Result.actions`. Binaries of
+    ``notice`` and the outcome is in :attr:`Result.actions`. Successful packages
+    are processed even if another install fails. Empty batches reconcile stale
+    configuration and retry pending work. Binaries of
     ``arch`` are cloned into ``bin/<arch>/``.
 
     The caller runs ``mktexlsr`` once afterwards when :attr:`Result.installed`
@@ -1094,16 +1096,16 @@ def install_packages(
     tree.flush()
     if progress and not result.failed:
         progress("Installing", total, total)
-    if result.failed and standalone:
-        # the tools may be missing; building formats now would only add noise
-        warn(
-            "Font maps and formats not built: "
-            f"{', '.join(result.failed)} did not install. Run `texi sync` again."
-        )
-    elif not tree.batch.empty or tree.batch.changed:
-        result.actions = tlactions.run(
-            env_dir, standalone=standalone, batch=tree.batch, arch=arch, notice=notice
-        )
+    # Reconcile every time, including partial installs and no-op syncs. Failed
+    # packages were not recorded; successful packages' actions remain useful.
+    result.actions = tlactions.run(
+        env_dir,
+        standalone=standalone,
+        batch=tree.batch,
+        arch=arch,
+        notice=notice,
+        log=log,
+    )
     return result
 
 

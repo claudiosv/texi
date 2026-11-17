@@ -54,12 +54,17 @@ After a package is cloned, texi performs the `execute` and `postaction` lines of
 
 - `addMap`, `addMixedMap`, `addKanjiMap`: texi writes `web2c/updmap.cfg` (standalone: `texmf-dist/web2c/updmap.cfg`) and runs `updmap-user` (standalone: `updmap-sys`) once.
 - `AddFormat`: texi writes `web2c/fmtutil.cnf` and builds the formats of the batch with `fmtutil-user --byfmt` (standalone: `fmtutil-sys`) once. Formats whose `fmttriggers` name a changed package are rebuilt, a failing build is a yellow warning.
-- `AddHyphen`: `language.dat`, `language.def` and `language.dat.lua` are derived from all installed packages plus the system's, written to `texmf-var/tex/generic/config/`, and fed to `fmtutil --byhyphen`. When no package adds hyphenation any more, the generated files are removed.
+- `AddHyphen`: `language.dat`, `language.def` and `language.dat.lua` are derived from all installed packages plus the system's and written to `texmf-var/tex/generic/config/`. Formats that use the changed language files are selected explicitly for rebuilding. When no package adds hyphenation any more, the generated files are removed.
 - Windows-only postactions (`shortcut`, `fileassoc`, `filetype`, `progid`) are ignored. `script` postactions run only in standalone trees.
 
 Binary packages (`name.<arch>`) are cloned for the selected architecture only into `.texenv/bin/<arch>/`, with execute bits kept and symlinks relative. Uninstalling a package removes its map, format and hyphenation entries and binaries.
 
 An unknown package goes to the missing list, a failed download or checksum mismatch is reported in yellow and the package is listed as failed.
+
+A failed package does not block actions for packages that installed successfully. Every sync reconciles the generated map, format and hyphenation configuration against the installed-package database, even when there are no packages to download. This repairs stale configurations left by interrupted or partial installs. Ready tools run independently; missing engines defer only the affected formats, and standalone trees never fall back to system tools.
+
+Unfinished work is saved atomically in `.texenv/tlpkg/texi-pending-actions.json` before configuration changes or external tools run. Missing or failed tools, unavailable engines, incomplete hyphenation configuration and failed scripts are retried on the next sync. Format status records determine which builds succeeded, including when fmtutil exits zero but reports an unavailable format. Successful work is cleared as it completes; removed or disabled formats are not rebuilt. A sync that has nothing to install can still finish pending work. Once configuration is current and all work is complete, later no-op syncs do not rerun the tools.
+
 
 #### Dependency resolution
 
