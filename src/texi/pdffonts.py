@@ -34,7 +34,8 @@ class Type3Font:
     name: str
     xref: int
     pages: list[int] = field(default_factory=list)  # 1-based
-    kind: str = ""  # "vector", "bitmap", "stroked" or "unknown" (set by classify)
+    kind: str = ""  # vector, bitmap, stroked, empty, mixed or unknown
+    glyph_kinds: dict[str, str] = field(default_factory=dict)
     origin: str = ""  # human hint on where it likely came from
 
 
@@ -45,6 +46,7 @@ class Report:
     skipped: list[Type3Font] = field(
         default_factory=list
     )  # left alone, with reason in .kind
+    removed: list[Type3Font] = field(default_factory=list)  # empty, unused resources
     remaining: list[Type3Font] = field(default_factory=list)  # Type 3 in the output
     errors: dict[int, str] = field(
         default_factory=dict
@@ -79,20 +81,22 @@ def _charprocs(doc: pymupdf.Document, xref: int) -> dict[str, int]:
 
 
 def _glyph_kind(stream: bytes) -> str:
-    if (
-        _INLINE_IMAGE.search(stream)
-        or _ID_OP.search(stream)
-        or _IMAGE_OP.search(stream)
-    ):
+    if _INLINE_IMAGE.search(stream) or _ID_OP.search(stream):
         return "bitmap"
     ops = set(
         re.findall(rb"(?<![A-Za-z0-9/])([A-Za-z][A-Za-z*]*)(?![A-Za-z0-9])", stream)
     )
+    if _IMAGE_OP.search(stream):
+        return "unknown"  # Do can invoke a Form XObject, not necessarily an image.
     if ops & _STROKE_OPS:
         return "stroked"
     if ops & _FILL_OPS and ops & {b"m", b"l", b"c", b"v", b"y", b"h", b"re"}:
         return "vector"
-    return "empty"
+    return (
+        "empty"
+        if not (ops - {b"d0", b"d1", b"q", b"Q", b"cm"} - _FILL_OPS)
+        else "unknown"
+    )
 
 
 def _origin(doc: pymupdf.Document, font: Type3Font, glyphs: dict[str, bytes]) -> str:
@@ -120,13 +124,174 @@ def classify(pdf: Path, fonts: list[Type3Font] | None = None) -> list[Type3Font]
                 name: doc.xref_stream(x) or b""
                 for name, x in _charprocs(doc, font.xref).items()
             }
-            kinds = {_glyph_kind(s) for s in glyphs.values()}
-            kind = next(
-                (k for k in ("bitmap", "stroked", "vector") if k in kinds), "unknown"
+            glyph_kinds = {name: _glyph_kind(stream) for name, stream in glyphs.items()}
+            kinds = set(glyph_kinds.values()) - {"empty"}
+            kind = (
+                (
+                    "empty"
+                    if re.fullmatch(r"<<\s*>>", _resolve(doc, font.xref, "CharProcs"))
+                    else "unknown"
+                )
+                if not glyphs
+                else "empty"
+                if not kinds
+                else next(iter(kinds))
+                if len(kinds) == 1
+                else "mixed"
             )
-            typed = replace(font, kind=kind)
+            typed = replace(font, kind=kind, glyph_kinds=glyph_kinds)
             out.append(replace(typed, origin=_origin(doc, typed, glyphs)))
     return out
+
+
+def _content_names(stream: bytes) -> set[bytes]:
+    """Lex PDF content names, skipping comments and literal/hex strings.
+
+    This is deliberately conservative: inline images and malformed tokens stop
+    unused-font cleanup rather than guessing where binary data ends.
+    """
+    names: set[bytes] = set()
+    whitespace = b"\x00\t\n\f\r "
+    delimiters = whitespace + b"()<>[]{}/%"
+    index = 0
+    while index < len(stream):
+        byte = stream[index]
+        if byte in whitespace:
+            index += 1
+        elif byte == ord("%"):
+            while index < len(stream) and stream[index] not in b"\r\n":
+                index += 1
+        elif byte == ord("("):
+            depth = 1
+            index += 1
+            while index < len(stream) and depth:
+                byte = stream[index]
+                if byte == ord("\\"):
+                    index += 2
+                    continue
+                if byte == ord("("):
+                    depth += 1
+                elif byte == ord(")"):
+                    depth -= 1
+                index += 1
+            if depth:
+                raise ValueError("Cannot prove font unused: unterminated PDF string.")
+        elif byte == ord("<") and stream[index : index + 2] != b"<<":
+            end = stream.find(b">", index + 1)
+            if end < 0:
+                raise ValueError("Cannot prove font unused: unterminated hex string.")
+            index = end + 1
+        elif stream[index : index + 2] == b"<<":
+            index += 2
+        elif byte == ord("/"):
+            end = index + 1
+            while end < len(stream) and stream[end] not in delimiters:
+                end += 1
+            name = re.sub(
+                rb"#([0-9a-fA-F]{2})",
+                lambda m: bytes([int(m[1], 16)]),
+                stream[index + 1 : end],
+            )
+            names.add(name)
+            index = end
+        elif byte in b")>[]{":
+            index += 1
+        else:
+            end = index + 1
+            while end < len(stream) and stream[end] not in delimiters:
+                end += 1
+            if stream[index:end] == b"BI":
+                raise ValueError(
+                    "Cannot prove font unused in content containing inline images."
+                )
+            index = end
+    return names
+
+
+def remove_unused_empty_font(doc: pymupdf.Document, font: Type3Font) -> None:
+    """Remove only a truly empty font whose resource names never occur in content.
+
+    Inspect all pages, Form/appearance XObjects, tiling patterns and Type 3
+    CharProcs, including unused streams. A same-named resource in another scope
+    also blocks removal. Font selections alone count as usage. Interactive
+    forms and graphics-state font arrays are refused, not inferred from text
+    extraction (which cannot detect all font uses).
+    """
+    if not re.fullmatch(r"<<\s*>>", _resolve(doc, font.xref, "CharProcs")):
+        raise ValueError("Font does not have a verifiably empty CharProcs dictionary.")
+    encoding = _resolve(doc, font.xref, "Encoding")
+    if (
+        not re.search(r"/Differences\s*\[\s*\]", encoding)
+        or "/BaseEncoding" in encoding
+    ):
+        raise ValueError("Empty font has a nonempty or unsupported encoding.")
+    if doc.is_repaired or doc.is_encrypted:
+        raise ValueError(
+            "Cannot prove empty font unused in an encrypted or repaired PDF."
+        )
+    if doc.xref_get_key(doc.pdf_catalog(), "AcroForm")[0] != "null":
+        raise ValueError("Cannot prove empty font unused in an interactive form PDF.")
+    references: set[tuple[int, str, str]] = set()
+    streams: set[int] = set()
+    used_names: set[bytes] = set()
+    for page in doc:
+        used_names.update(_content_names(page.read_contents()))
+    for xref in range(1, doc.xref_length()):
+        kind, appearance = doc.xref_get_key(xref, "DA")
+        if kind == "string":
+            used_names.update(_content_names(appearance.encode("utf-8")))
+        elif kind != "null":
+            raise ValueError(
+                "Cannot prove font unused with an indirect default appearance."
+            )
+        for path in ("Resources/Font", "Font"):
+            kind, value = doc.xref_get_key(xref, path)
+            if (
+                kind in {"array", "xref"}
+                and _resolve(doc, xref, path).lstrip().startswith("[")
+                and re.search(
+                    rf"(?<![0-9]){font.xref}\s+\d+\s+R", _resolve(doc, xref, path)
+                )
+            ):
+                raise ValueError(
+                    "Cannot remove font referenced by a graphics-state font array."
+                )
+            if kind in {"dict", "xref"}:
+                for match in _REF.finditer(_resolve(doc, xref, path)):
+                    if int(match[2]) == font.xref:
+                        references.add((xref, path, match[1]))
+        if doc.xref_is_stream(xref) and (
+            doc.xref_get_key(xref, "Subtype")[1] == "/Form"
+            or doc.xref_get_key(xref, "PatternType")[1] == "1"
+        ):
+            streams.add(xref)
+        if doc.xref_get_key(xref, "Subtype")[1] == "/Type3":
+            streams.update(_charprocs(doc, xref).values())
+    for xref in streams:
+        used_names.update(_content_names(doc.xref_stream(xref) or b""))
+    if not references:
+        raise ValueError("Cannot locate empty font's resource references.")
+    for _, _, raw_name in references:
+        name = re.sub(
+            rb"#([0-9a-fA-F]{2})", lambda m: bytes([int(m[1], 16)]), raw_name.encode()
+        )
+        if name in used_names:
+            raise ValueError(
+                f"Empty font resource /{raw_name} is referenced in content; left unchanged."
+            )
+    # Resolve indirect font dictionaries once. Multiple owners may share them.
+    edits: set[tuple[int, str]] = set()
+    for owner, path, raw_name in references:
+        prefix = ""
+        for part in path.split("/"):
+            prefix = prefix + "/" + part if prefix else part
+            kind, value = doc.xref_get_key(owner, prefix)
+            if kind == "xref":
+                owner = int(value.split()[0])
+                prefix = ""
+        edits.add((owner, prefix + "/" + raw_name if prefix else raw_name))
+    for owner, key in edits:
+        doc.xref_set_key(owner, key, "null")
 
 
 # --- outline conversion ------------------------------------------------------
@@ -293,9 +458,26 @@ def _convert_font(doc: pymupdf.Document, font: Type3Font) -> None:
     x = font.xref
     matrix = _numbers(_resolve(doc, x, "FontMatrix")) or [0.001, 0, 0, 0.001, 0, 0]
     data, bbox = _build_ttf(doc, font, matrix)
-    base = doc.xref_get_key(x, "BaseFont")[1] or f"/{font.name}"
-    if not base.startswith("/"):
-        base = "/" + base
+    _embed_ttf(doc, font, data, bbox, matrix)
+
+
+def _embed_ttf(
+    doc: pymupdf.Document,
+    font: Type3Font,
+    data: bytes,
+    bbox: tuple[int, int, int, int],
+    matrix: list[float],
+) -> None:
+    x = font.xref
+    base_kind, base = doc.xref_get_key(x, "BaseFont")
+    if base_kind != "name":
+        base = "/" + "".join(
+            chr(b)
+            if chr(b)
+            in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.+-"
+            else f"#{b:02X}"
+            for b in font.name.encode("utf-8")
+        )
 
     file_xref = doc.get_new_xref()
     doc.update_object(file_xref, f"<</Length1 {len(data)}>>")
@@ -331,6 +513,15 @@ def convert_outlines(src: Path, dst: Path) -> Report:
     fonts = classify(src)
     with pymupdf.open(src) as doc:
         for font in fonts:
+            if font.kind == "empty" and not font.glyph_kinds:
+                try:
+                    remove_unused_empty_font(doc, font)
+                except ValueError as e:
+                    report.errors[font.xref] = str(e)
+                    report.skipped.append(font)
+                else:
+                    report.removed.append(font)
+                continue
             if font.kind != "vector":
                 report.skipped.append(font)
                 continue

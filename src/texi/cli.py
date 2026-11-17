@@ -8,6 +8,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import textwrap
 import time
 import tomllib
@@ -33,6 +34,7 @@ from rich.tree import Tree
 from texi import (
     archive,
     deptree,
+    fontsub,
     latexmk_files,
     logparse_bib,
     lsr,
@@ -855,7 +857,9 @@ def init(
         if not all(p.is_relative_to("src") for p in main_files):
             src_dir = "."
         targets = [p.relative_to(src_dir).as_posix() for p in main_files]
-        console.print(f"Found main TeX file(s): {escape(', '.join(map(str, main_files)))}")
+        console.print(
+            f"Found main TeX file(s): {escape(', '.join(map(str, main_files)))}"
+        )
     else:
         console.print("[dim]No \\documentclass found; using src/main.tex.[/dim]")
     packages = extract_packages_from_tex(cwd, tex_files)
@@ -884,7 +888,10 @@ def init(
     try:
         config = TexProjectConfig(
             project=ProjectConfig(
-                name=cwd.name, dependencies=dependencies, src_dir=src_dir, targets=targets
+                name=cwd.name,
+                dependencies=dependencies,
+                src_dir=src_dir,
+                targets=targets,
             )
         )
     except ValidationError as e:
@@ -1797,7 +1804,7 @@ def _pdf_path(config: TexProjectConfig) -> Path:
     return Path.cwd() / final_dir / f"{config.jobname}.pdf"
 
 
-def _warn_type3(pdf: Path) -> None:
+def _warn_type3(pdf: Path, fls_path: Path | None = None) -> None:
     """Orange warning if the PDF has Type 3 fonts. Never raises: a broken PDF must not fail a build."""
     try:
         if not pdf.is_file():
@@ -1815,6 +1822,35 @@ def _warn_type3(pdf: Path) -> None:
         f"[orange1]⚠ {len(fonts)} Type 3 font(s) in {escape(str(pdf.name))}: "
         f"{escape(names)}. ACM does not accept Type 3 fonts.[/orange1]"
     )
+    if fls_path is not None:
+        try:
+            used_files, _ = latexmk_files.tree_used_paths(fls_path)
+        except OSError as e:
+            console.print(
+                f"[dim]  Could not scan included PDFs: {escape(str(e))}[/dim]"
+            )
+        else:
+            for source in sorted(used_files):
+                if source.suffix.lower() != ".pdf" or source == pdf.resolve():
+                    continue
+                try:
+                    source_fonts = pdffonts.find_type3(source)
+                except Exception as e:
+                    console.print(
+                        f"[dim]  Could not check {escape(str(source))}: {escape(str(e))}[/dim]"
+                    )
+                    continue
+                if source_fonts:
+                    display = (
+                        source.relative_to(Path.cwd())
+                        if source.is_relative_to(Path.cwd())
+                        else source
+                    )
+                    source_names = ", ".join(f.name for f in source_fonts)
+                    console.print(
+                        f"[orange1]  {escape(str(display))}: "
+                        f"{len(source_fonts)} Type 3 font(s): {escape(source_names)}[/orange1]"
+                    )
     console.print(
         '[dim]  matplotlib: plt.rcParams["pdf.fonttype"] = 42 (then re-export the figure)[/dim]'
     )
@@ -1823,7 +1859,10 @@ def _warn_type3(pdf: Path) -> None:
 
 def _check_type3(config: TexProjectConfig) -> None:
     if config.build.check_type3:
-        _warn_type3(_pdf_path(config))
+        _warn_type3(
+            _pdf_path(config),
+            Path.cwd() / config.build.aux_dir / f"{config.jobname}.fls",
+        )
 
 
 def _watch_captured(
@@ -2507,6 +2546,16 @@ def _print_type3_report(fonts: list[pdffonts.Type3Font]) -> None:
     for f in fonts:
         pages = ", ".join(map(str, f.pages[:15])) + (" …" if len(f.pages) > 15 else "")
         extra = f"; {f.origin}" if f.origin else ""
+        if f.kind == "empty" and not f.glyph_kinds:
+            extra += "; empty glyph dictionary (no glyph programs)"
+        if f.kind == "unknown":
+            extra += "; unrecognized drawing instructions, not classified as bitmap"
+        if f.glyph_kinds:
+            counts = {
+                k: list(f.glyph_kinds.values()).count(k)
+                for k in sorted(set(f.glyph_kinds.values()))
+            }
+            extra += "; glyphs: " + ", ".join(f"{n} {k}" for k, n in counts.items())
         console.print(
             f"[orange1]•[/orange1] [bold]{escape(f.name)}[/bold]  "
             f"{f.kind or 'unclassified'}{escape(extra)}  [dim](pages {pages})[/dim]"
@@ -2527,12 +2576,19 @@ def _fix_outline(pdf: Path, output: Path | None, in_place: bool) -> None:
             f"[green]✔ Converted {len(report.converted)} vector font(s) to TrueType: "
             f"{escape(', '.join(f.name for f in report.converted))}[/green]"
         )
-    for f in report.skipped:
-        why = report.errors.get(f.xref) or f.kind
+    for f in report.removed:
         console.print(
-            f"[yellow]Left alone: {escape(f.name)} ({escape(why)}); "
-            "bitmap fonts cannot be converted.[/yellow]"
+            f"[green]✔ Removed unused empty font resource: {escape(f.name)}[/green]"
         )
+    for f in report.skipped:
+        why = report.errors.get(f.xref) or {
+            "bitmap": "contains raster glyphs; outline conversion is unsupported",
+            "stroked": "contains stroked paths; outline conversion is unsupported",
+            "empty": "only empty glyphs; no outlines to convert",
+            "mixed": "mixed glyph types; outline conversion is unsupported",
+            "unknown": "unrecognized glyph drawing instructions; this does not mean bitmap",
+        }.get(f.kind, f.kind)
+        console.print(f"[yellow]Left alone: {escape(f.name)} ({escape(why)})[/yellow]")
     console.print(f"[dim]Wrote {escape(str(report.output))}[/dim]")
     if report.remaining:
         console.print(f"[red]✖ {len(report.remaining)} Type 3 font(s) remain:[/red]")
@@ -2568,13 +2624,15 @@ def _fix_rebuild(config: TexProjectConfig, pdf: Path) -> None:
 
 @app.command(
     name="fix-pdf",
-    help="Find Type 3 fonts in a PDF (ACM rejects them) and fix or explain them.",
+    help="Find Type 3 fonts in PDFs (ACM rejects them) and fix or explain them.",
     rich_help_panel="Build",
 )
 def fix_pdf(
-    pdf: Annotated[
-        Path | None,
-        typer.Argument(help="PDF to check. Default: the project's built PDF."),
+    pdfs: Annotated[
+        list[Path] | None,
+        typer.Argument(
+            help="PDFs to check. Default: PDF inputs from the build recorder (.fls)."
+        ),
     ] = None,
     method: Annotated[
         FixMethod,
@@ -2601,38 +2659,161 @@ def fix_pdf(
 ) -> None:
     """Detect Type 3 fonts and suggest or apply a fix."""
     _intro("texi fix-pdf")
+    discovered = not pdfs
     config = None
-    if pdf is None or method is FixMethod.REBUILD:
+    if discovered or method is FixMethod.REBUILD:
         config = load_project_config(Path.cwd() / "texproject.toml")
-    if pdf is None:
+    if discovered:
         assert config is not None
-        pdf = _pdf_path(config)
-    if not pdf.is_file():
-        console.print(f"[red]Error:[/red] PDF not found: {escape(str(pdf))}")
-        raise typer.Exit(code=1)
-    if method is FixMethod.REBUILD:
-        assert config is not None
-        _fix_rebuild(config, pdf)
-        return
-    try:
-        fonts = pdffonts.classify(pdf)
-    except Exception as e:
-        console.print(
-            f"[red]Error:[/red] cannot read {escape(str(pdf))}: {escape(str(e))}"
+        fls_path = Path.cwd() / config.build.aux_dir / f"{config.jobname}.fls"
+        try:
+            used_files, _ = latexmk_files.tree_used_paths(fls_path)
+        except OSError as e:
+            console.print(
+                f"[red]Error:[/red] cannot read build recorder: {escape(str(e))}"
+            )
+            raise typer.Exit(code=1) from e
+        pdfs = sorted(
+            p
+            for p in used_files
+            if p.suffix.lower() == ".pdf" and p != _pdf_path(config).resolve()
         )
-        raise typer.Exit(code=1) from e
-    if not fonts:
+    assert pdfs is not None
+    pdfs = list(dict.fromkeys(p.resolve() for p in pdfs))
+    if output is not None and len(pdfs) != 1:
+        raise typer.BadParameter("--output requires exactly one PDF.")
+    reports: list[tuple[Path, list[pdffonts.Type3Font]]] = []
+    for pdf in pdfs:
+        if not pdf.is_file():
+            console.print(f"[red]Error:[/red] PDF not found: {escape(str(pdf))}")
+            raise typer.Exit(code=1)
+        try:
+            fonts = pdffonts.classify(pdf)
+        except Exception as e:
+            console.print(
+                f"[red]Error:[/red] cannot read {escape(str(pdf))}: {escape(str(e))}"
+            )
+            raise typer.Exit(code=1) from e
+        if fonts:
+            reports.append((pdf, fonts))
+            console.print(
+                f"[orange1]⚠ {len(fonts)} Type 3 font(s) in {escape(str(pdf))}:[/orange1]"
+            )
+            _print_type3_report(fonts)
+    if not reports:
         outro("[green]✔ No Type 3 fonts[/green]")
         return
-    console.print(
-        f"[orange1]⚠ {len(fonts)} Type 3 font(s) in {escape(pdf.name)}:[/orange1]"
-    )
-    _print_type3_report(fonts)
     if method is FixMethod.ADVISE:
         for line in pdffonts.suggestion_text():
             console.print(f"[dim]{escape(line)}[/dim]")
         return
-    _fix_outline(pdf, output, in_place)
+    if discovered:
+        console.print("[bold]Files that would be changed:[/bold]")
+        if method is FixMethod.REBUILD:
+            assert config is not None
+            console.print(f"  Rebuild project: {escape(str(_pdf_path(config)))}")
+        else:
+            for pdf, fonts in reports:
+                target = pdf if in_place else output or pdf.with_suffix(".fixed.pdf")
+                console.print(f"  {escape(str(pdf))} → {escape(str(target))}")
+                if in_place:
+                    console.print(
+                        f"    Backup: {escape(str(pdf.with_suffix('.pdf.bak')))}"
+                    )
+        if not _confirm("Apply these changes?"):
+            outro("Cancelled; no PDFs changed.")
+            return
+    if method is FixMethod.REBUILD:
+        assert config is not None
+        _fix_rebuild(config, _pdf_path(config))
+        return
+    failed = False
+    for pdf, _ in reports:
+        console.print(f"[bold]{escape(str(pdf))}[/bold]")
+        try:
+            _fix_outline(pdf, output, in_place)
+        except typer.Exit as e:
+            if e.exit_code != 1:
+                raise
+            failed = True
+    if failed:
+        raise typer.Exit(code=1)
+
+
+@app.command(
+    name="substitute-font",
+    help="Replace a Type 3 PDF font using a font file, Font Book or matplotlib bundles.",
+    rich_help_panel="Build",
+)
+def substitute_font(
+    pdf: Annotated[Path, typer.Argument(help="PDF to repair.")],
+    font: Annotated[
+        str,
+        typer.Argument(help="PDF font name (subset prefix optional when unambiguous)."),
+    ],
+    font_file: Annotated[
+        Path | None, typer.Option(help="Replacement TTF/OTF/TTC file.")
+    ] = None,
+    font_name: Annotated[
+        str | None,
+        typer.Option(help="Replacement full/PostScript name; default: PDF font name."),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="Default: <name>.substituted.pdf."),
+    ] = None,
+    in_place: Annotated[
+        bool,
+        typer.Option(
+            "--in-place", help="Replace input after verification, keeping a .bak."
+        ),
+    ] = False,
+) -> None:
+    """Verify every glyph mapping and preserve PDF text advances and positions."""
+    _intro("texi substitute-font")
+    if in_place and output is not None:
+        raise typer.BadParameter("Use either --in-place or --output.")
+    target = output or pdf.with_suffix(".substituted.pdf")
+    if target.resolve() == pdf.resolve():
+        raise typer.BadParameter(
+            "Use --in-place to overwrite the input PDF with a backup."
+        )
+    temporary = None
+    try:
+        matches = fontsub.matching_fonts(pdf, font)
+        face = None
+        if any(f.kind != "empty" or f.glyph_kinds for f in matches):
+            face = fontsub.find_font(font_name or font, font_file)
+            console.print(
+                f"[dim]Replacement: {escape(str(face.path))} (face {face.index})[/dim]"
+            )
+        if in_place:
+            with tempfile.NamedTemporaryFile(
+                dir=pdf.parent, suffix=".pdf", delete=False
+            ) as temp:
+                temporary = Path(temp.name)
+            target = temporary
+        count = fontsub.substitute_font(pdf, target, font, face)
+        if in_place:
+            backup = pdf.with_suffix(pdf.suffix + ".bak")
+            shutil.copy2(pdf, backup)
+            target.replace(pdf)
+            target = pdf
+        if count:
+            console.print(
+                f"[green]✔ Verified {count} glyph(s); preserved text and positions.[/green]"
+            )
+        else:
+            console.print(
+                "[green]✔ Removed unused empty font resource; preserved text and positions.[/green]"
+            )
+        outro(f"Wrote {escape(str(target))}")
+    except Exception as e:
+        console.print(f"[red]Error:[/red] {escape(str(e))}")
+        raise typer.Exit(code=1) from e
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 @app.command(
@@ -2654,16 +2835,7 @@ def build_tree(
         )
         return
 
-    # Parse the .fls file for used inputs
-    used_files: set[Path] = set()
-    used_folders: set[Path] = set()
-    with fls_path.open("r", encoding="utf-8") as f:
-        for line in f:
-            if line.startswith("INPUT "):
-                raw_path = line.removeprefix("INPUT ").strip()
-                # Resolve creates an absolute path, normalizing relative dots
-                used_files.add(Path(raw_path).resolve())
-                used_folders.add(Path(raw_path).parent.resolve())
+    used_files, used_folders = latexmk_files.tree_used_paths(fls_path)
 
     def walk_directory(current_dir: Path, tree: Tree) -> None:
         # Sort dirs first then by filename

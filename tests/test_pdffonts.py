@@ -175,3 +175,104 @@ def test_real_matplotlib_pdf(tmp_path: Path) -> None:
     assert pdffonts.find_type3(out) == []
     with pymupdf.open(out) as doc:
         assert doc[0].get_text() == before
+
+
+def test_warn_type3_included_pdfs(
+    vector_pdf: Path,
+    plain_pdf: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    from texi.cli import _warn_type3
+
+    figures = tmp_path / "figures"
+    figures.mkdir()
+    source = make_pdf(figures / "plot.pdf", {"A": VECTOR_A, "B": VECTOR_B})
+    bad = figures / "broken.pdf"
+    bad.write_bytes(b"not a pdf")
+    fls = tmp_path / "main.fls"
+    fls.write_text(
+        f"PWD {tmp_path}\nINPUT {vector_pdf}\nINPUT figures/plot.pdf\n"
+        f"INPUT ./figures/plot.pdf\nINPUT {plain_pdf}\nINPUT figures/broken.pdf\n"
+    )
+    # Resolve recorder inputs against PWD even when the caller is elsewhere.
+    monkeypatch.chdir(figures)
+    _warn_type3(vector_pdf, fls)
+    output = capsys.readouterr().out
+    assert output.count("plot.pdf:") == 1
+    assert pdffonts.find_type3(source)[0].name in output
+    assert "plain.pdf" not in output
+    assert "Could not check" in output
+    assert "broken.pdf" in output
+
+
+def test_warn_type3_missing_recorder(
+    vector_pdf: Path, capsys: pytest.CaptureFixture
+) -> None:
+    from texi.cli import _warn_type3
+
+    _warn_type3(vector_pdf, vector_pdf.with_suffix(".fls"))
+    output = capsys.readouterr().out
+    assert "Could not scan included PDFs" in output
+    assert "Run `texi fix-pdf`" in output
+
+
+def test_cli_outline_multiple(vector_pdf: Path, bitmap_pdf: Path) -> None:
+    result = CliRunner().invoke(
+        app, ["fix-pdf", str(bitmap_pdf), str(vector_pdf), "-m", "outline"]
+    )
+    assert result.exit_code == 1
+    assert vector_pdf.with_suffix(".fixed.pdf").is_file()
+    assert pdffonts.find_type3(vector_pdf.with_suffix(".fixed.pdf")) == []
+    assert bitmap_pdf.with_suffix(".fixed.pdf").is_file()
+
+
+def test_cli_multiple_rejects_output(
+    vector_pdf: Path, bitmap_pdf: Path, tmp_path: Path
+) -> None:
+    out = tmp_path / "out.pdf"
+    result = CliRunner().invoke(
+        app,
+        ["fix-pdf", str(vector_pdf), str(bitmap_pdf), "-m", "outline", "-o", str(out)],
+    )
+    assert result.exit_code != 0
+    assert "exactly one PDF" in result.output
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("accept", [False, True])
+def test_cli_discover_confirmation(
+    vector_pdf: Path,
+    plain_pdf: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    accept: bool,
+) -> None:
+    from texi import cli
+    from texi.config import TexProjectConfig
+
+    monkeypatch.chdir(tmp_path)
+    config = TexProjectConfig()
+    monkeypatch.setattr(cli, "load_project_config", lambda _: config)
+    aux = tmp_path / config.build.aux_dir
+    aux.mkdir(parents=True, exist_ok=True)
+    (aux / f"{config.jobname}.fls").write_text(
+        f"PWD {tmp_path}\nINPUT {vector_pdf}\nINPUT {plain_pdf}\nINPUT {vector_pdf}\n"
+    )
+    prompts = []
+
+    def confirm(message: str) -> bool:
+        prompts.append(message)
+        assert not vector_pdf.with_suffix(".pdf.bak").exists()
+        return accept
+
+    monkeypatch.setattr(cli, "_confirm", confirm)
+    result = CliRunner().invoke(app, ["fix-pdf", "-m", "outline", "--in-place"])
+    assert result.exit_code == 0, result.output
+    assert prompts == ["Apply these changes?"]
+    assert "Files that would be changed" in result.output
+    assert vector_pdf.name in result.output
+    assert plain_pdf.name not in result.output
+    assert vector_pdf.with_suffix(".pdf.bak").exists() == accept
+    assert bool(pdffonts.find_type3(vector_pdf)) != accept
