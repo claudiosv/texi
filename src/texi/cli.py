@@ -2946,7 +2946,14 @@ def substitute_font(
     rich_help_panel="Build",
 )
 def build_tree(
-    project_dir: Path | None = None, fls_filename: str | None = None
+    project_dir: Path | None = None,
+    fls_filename: str | None = None,
+    bib: Annotated[
+        bool,
+        typer.Option(
+            "--bib", help="Only list the .bib files the build read (also outside the project)."
+        ),
+    ] = False,
 ) -> None:
     if project_dir is None:
         project_dir = Path.cwd()
@@ -2960,6 +2967,20 @@ def build_tree(
         return
 
     used_files, used_folders = latexmk_files.tree_used_paths(fls_path)
+    # bibtex/biber inputs are only in .fdb_latexmk, not in the pdflatex .fls
+    pf = latexmk_files.ProjectFiles.from_build(
+        project_dir / config.build.aux_dir, Path(fls_filename).stem
+    )
+    for p in pf.all_inputs():
+        if p.is_file():
+            rp = p.resolve()
+            used_files.add(rp)
+            used_folders.add(rp.parent)
+    bibs = sorted({p.resolve() for p in pf.bib_files()})
+    if bib:
+        for p in bibs:
+            console.print(str(p), soft_wrap=True, markup=False, highlight=False)
+        return
 
     def walk_directory(current_dir: Path, tree: Tree) -> None:
         # Sort dirs first then by filename
@@ -2993,6 +3014,15 @@ def build_tree(
         guide_style="bold bright_blue",
     )
     walk_directory(project_dir, tree)
+    root = project_dir.resolve()
+    outside = [p for p in bibs if root not in p.parents]
+    if outside:
+        branch = tree.add("[bold magenta]:open_file_folder: outside project (.bib only)")
+        for p in outside:
+            name = Text(str(p), "green")
+            name.stylize(f"link file://{p}")
+            name.append(f" ({decimal(p.stat().st_size)})", "blue")
+            branch.add(Text("📄 ") + name)
     console.print(tree)
 
 

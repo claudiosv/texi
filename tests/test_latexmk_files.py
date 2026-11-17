@@ -412,3 +412,22 @@ def test_load_bad_utf8(tmp_path):
     p = tmp_path / "a.fls"
     p.write_bytes(b"PWD /w\nINPUT caf\xe9.tex\n")
     assert load_fls(p).inputs == ["caf�.tex"]
+
+
+def test_bib_files_from_fdb_inside_and_outside(tmp_path):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    outside = tmp_path / "shared"
+    outside.mkdir()
+    (proj / "a.bib").write_text("@misc{a}")
+    (outside / "b.bib").write_text("@misc{b}")
+    (proj / "main.fls").write_text(f"PWD {proj}\nINPUT main.tex\nOUTPUT main.aux\n")
+    (proj / "main.fdb_latexmk").write_text(
+        "# Fdb version 4\n"
+        '["bibtex main"] 1 "main" "main.bbl" "main" 1 0\n'
+        f'  "{proj}/a.bib" 1 10 0 ""\n'
+        f'  "{outside}/b.bib" 1 10 0 ""\n'
+        f'  "{proj}/missing.bib" 1 -1 0 ""\n'
+    )
+    pf = ProjectFiles.from_build(proj, "main")
+    assert pf.bib_files() == [proj / "a.bib", outside / "b.bib"]

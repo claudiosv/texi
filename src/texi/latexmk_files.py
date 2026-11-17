@@ -692,6 +692,10 @@ class ProjectFiles:
                         out.setdefault(_normalize(d.path, pwd))
         return list(out)
 
+    def all_inputs(self) -> list[Path]:
+        """Return resolved inputs from both files, first-seen order, fls first."""
+        return [Path(p) for p in self._all_inputs()]
+
     def _generated(self) -> set[str]:
         gen: set[str] = set()
         pwd = self.pwd
@@ -736,6 +740,19 @@ class ProjectFiles:
             Path(p)
             for p in self._all_inputs()
             if p not in gen and (not _is_within(p, r) or is_texmf_path(p))
+        ]
+
+    def bib_files(self) -> list[Path]:
+        """Return the existing ``.bib`` files the build read, inside or outside the project.
+
+        The ``.fls`` only lists what pdflatex opened; bibtex and biber inputs
+        come from the ``.fdb_latexmk`` rules. Generated files are left out.
+        """
+        gen = self._generated()
+        return [
+            Path(p)
+            for p in self._all_inputs()
+            if p.lower().endswith(".bib") and p not in gen and Path(p).is_file()
         ]
 
     def generated_files(self) -> list[Path]:
