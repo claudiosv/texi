@@ -2948,6 +2948,37 @@ def substitute_font(
             temporary.unlink(missing_ok=True)
 
 
+def _build_tree_file_icon(path: Path) -> str:
+    match path.suffix.lower():
+        case ".tex" | ".ltx" | ".sty" | ".cls":
+            return "📝 "
+        case ".pdf":
+            return "📕 "
+        case (
+            ".png"
+            | ".jpg"
+            | ".jpeg"
+            | ".gif"
+            | ".webp"
+            | ".svg"
+            | ".eps"
+            | ".ps"
+            | ".tif"
+            | ".tiff"
+            | ".bmp"
+            | ".avif"
+            | ".heic"
+            | ".mps"
+        ):
+            return "🖼️ "
+        case ".bib":
+            return "📚 "
+        case ".py":
+            return "🐍 "
+        case _:
+            return "📄 "
+
+
 @app.command(
     name="build-tree",
     help="Show which files the last build actually read, as a directory tree.",
@@ -3015,8 +3046,7 @@ def build_tree(
                 text_filename.stylize(f"link file://{path}")
                 file_size = path.stat().st_size
                 text_filename.append(f" ({decimal(file_size)})", "blue")
-                icon = "🐍 " if path.suffix == ".py" else "📄 "
-                tree.add(Text(icon) + text_filename)
+                tree.add(Text(_build_tree_file_icon(path)) + text_filename)
 
     tree = Tree(
         f":open_file_folder: [link file://{project_dir.resolve()}]{project_dir}",
@@ -3033,7 +3063,7 @@ def build_tree(
             name = Text(str(p), "green")
             name.stylize(f"link file://{p}")
             name.append(f" ({decimal(p.stat().st_size)})", "blue")
-            branch.add(Text("📄 ") + name)
+            branch.add(Text(_build_tree_file_icon(p)) + name)
     console.print(tree)
 
 
