@@ -34,6 +34,8 @@ from rich.tree import Tree
 
 from texi import (
     archive,
+    bibhints,
+    bibparse,
     deptree,
     fontsub,
     latexmk_files,
@@ -1619,6 +1621,7 @@ def _collect_diagnostics(config: TexProjectConfig, since: float) -> list[Diagnos
                 diags += parse(path.read_text(encoding="utf-8", errors="replace"))
         _resolve_biber_temp_files(diags, config, aux / f"{name}.bcf")
     _explain_runaways(diags, config)
+    _explain_bib(diags, config)
     return diags
 
 
@@ -1673,6 +1676,28 @@ def _resolve_biber_temp_files(
             d.file = str(real)
             lines = real.read_text(encoding="utf-8", errors="replace").splitlines()
             d.hint = logparse_bib.explain_syntax(d, lines)
+
+
+def _explain_bib(diags: list[Diagnostic], config: TexProjectConfig) -> None:
+    """Add hints to bibtex/biber diagnostics that have none, using the project's .bib files."""
+    todo = [d for d in diags if d.source in {"bibtex", "biber"} and not d.hint]
+    if not todo:
+        return
+    cwd = Path.cwd()
+    dirs = [cwd, cwd / config.src_dir, *(cwd / d for d in config.build.bib_dirs)]
+    paths = {
+        p.resolve()
+        for base in dirs
+        if base.is_dir()
+        for p in base.rglob("*.bib")
+        if not any(
+            part in _SKIP_DIR_NAMES or part.startswith(".")
+            for part in p.relative_to(base).parts[:-1]
+        )
+    }
+    bibs = {str(p): bibparse.parse_bib_file(p) for p in sorted(paths)}
+    for d in todo:
+        d.hint = bibhints.explain(d, bibs)
 
 
 # Off for now: a `file://` URL cannot carry the line number, so terminals open the file at the top.
