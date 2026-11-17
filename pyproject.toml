@@ -82,3 +82,6 @@ show_missing = true
 
 [tool.coverage.html]
 directory = "htmlcov"
+
+[tool.uv]
+override-dependencies = ["onnxruntime; python_full_version < '3.15'"]
