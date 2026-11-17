@@ -24,7 +24,7 @@ import tarfile
 from collections.abc import Callable
 from pathlib import Path
 
-import httpx2
+lazy import httpx2
 
 from texi import archive, tlpdb
 

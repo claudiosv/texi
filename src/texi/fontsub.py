@@ -12,14 +12,14 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-import pymupdf
-from fontTools.agl import toUnicode
-from fontTools.fontBuilder import FontBuilder
-from fontTools.pens.cu2quPen import Cu2QuPen
-from fontTools.pens.recordingPen import DecomposingRecordingPen
-from fontTools.pens.transformPen import TransformPen
-from fontTools.pens.ttGlyphPen import TTGlyphPen
-from fontTools.ttLib import TTCollection, TTFont
+lazy import pymupdf
+lazy from fontTools.agl import toUnicode
+lazy from fontTools.fontBuilder import FontBuilder
+lazy from fontTools.pens.cu2quPen import Cu2QuPen
+lazy from fontTools.pens.recordingPen import DecomposingRecordingPen
+lazy from fontTools.pens.transformPen import TransformPen
+lazy from fontTools.pens.ttGlyphPen import TTGlyphPen
+lazy from fontTools.ttLib import TTCollection, TTFont
 
 from texi import pdffonts
 

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import functools
 import shlex
 import shutil
 import sqlite3
@@ -18,19 +19,19 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
-import inflect
-import sh
-import typer
-from pyclack.core import ShimmerProgress, is_cancel
-from pyclack.prompts import Option, confirm, note, outro, select
-from pyclack.utils.console import console
-from pyclack.utils.styling import S_BAR_START, Color
-from pydantic import ValidationError
-from rich.filesize import decimal
-from rich.markup import escape
-from rich.table import Table
-from rich.text import Text
-from rich.tree import Tree
+lazy import inflect
+lazy import sh
+lazy import typer
+lazy from pyclack.core import ShimmerProgress, is_cancel
+lazy from pyclack.prompts import Option, confirm, note, outro, select
+lazy from pyclack.utils.console import console
+lazy from pyclack.utils.styling import S_BAR_START, Color
+lazy from pydantic import ValidationError
+lazy from rich.filesize import decimal
+lazy from rich.markup import escape
+lazy from rich.table import Table
+lazy from rich.text import Text
+lazy from rich.tree import Tree
 
 from texi import (
     archive,
@@ -222,7 +223,9 @@ def _peek_project() -> ProjectConfig | None:
 
 latexmk_path = shutil.which("latexmk")
 texfmt_path = shutil.which("tex-fmt")
-inflect_engine = inflect.engine()
+@functools.cache
+def _inflect_engine() -> "inflect.engine":
+    return inflect.engine()
 
 # --- Core Logic ---
 
@@ -1314,7 +1317,7 @@ def _archive_install(
             console.print(f"[yellow]{escape(str(e))}[/yellow]")
         n = result.cached
         console.print(
-            f"[green]✔ Cloned {n} {inflect_engine.plural('package', n)} from cache, "
+            f"[green]✔ Cloned {n} {_inflect_engine().plural('package', n)} from cache, "
             f"downloaded {len(result.downloaded)}[/green]"
         )
     if result.recorded:
@@ -1338,7 +1341,7 @@ def _sync_archive(
     """`texi sync`: nothing is written outside .texenv/."""
     env_dir = Path.cwd() / ".texenv"
     standalone = _standalone(env_dir)
-    plural = inflect_engine.plural
+    plural = _inflect_engine().plural
     if not packages:
         console.print(
             "[yellow]No dependencies found in texproject.toml; checking installed package actions.[/yellow]"
@@ -3337,7 +3340,7 @@ def outdated(debug: DebugOpt = False) -> None:
         return
     n = len(rows) + (1 if tex_fmt_row else 0)
     outro(
-        f"[yellow]{n} {inflect_engine.plural('package', n)} can be updated; "
+        f"[yellow]{n} {_inflect_engine().plural('package', n)} can be updated; "
         "run `texi sync`[/yellow]"
     )
 
@@ -3732,7 +3735,7 @@ def cache_prune(
     total = sum(size for _, size in removed) / 1e6
     verb = "Would remove" if dry_run else "Removed"
     outro(
-        f"{verb} {len(removed)} {inflect_engine.plural('entry', len(removed))}, {total:.1f} MB"
+        f"{verb} {len(removed)} {_inflect_engine().plural('entry', len(removed))}, {total:.1f} MB"
     )
 
 

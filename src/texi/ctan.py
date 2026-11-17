@@ -26,10 +26,10 @@ import weakref
 from pathlib import Path
 from typing import Any, Self
 
-import httpx2
-from hishel import SqliteStorage
-from hishel.httpx2 import CacheTransport
-from pydantic import (
+lazy import httpx2
+lazy from hishel import SqliteStorage
+lazy from hishel.httpx2 import CacheTransport
+lazy from pydantic import (
     AliasChoices,
     BaseModel,
     ConfigDict,

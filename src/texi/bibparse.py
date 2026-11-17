@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
 
-from tree_sitter import Node, Parser
-from tree_sitter_language_pack import get_parser
+lazy from tree_sitter import Node, Parser
+lazy from tree_sitter_language_pack import get_parser
 
 __all__ = ["BibEntry", "BibError", "BibFile", "parse_bib", "parse_bib_file"]
 

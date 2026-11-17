@@ -10,11 +10,11 @@ import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-import pymupdf
-from fontTools.agl import toUnicode
-from fontTools.fontBuilder import FontBuilder
-from fontTools.pens.cu2quPen import Cu2QuPen
-from fontTools.pens.ttGlyphPen import TTGlyphPen
+lazy import pymupdf
+lazy from fontTools.agl import toUnicode
+lazy from fontTools.fontBuilder import FontBuilder
+lazy from fontTools.pens.cu2quPen import Cu2QuPen
+lazy from fontTools.pens.ttGlyphPen import TTGlyphPen
 
 UPEM = 1000
 _REF = re.compile(r"/([^\s/<>\[\]()]+)\s+(\d+)\s+\d+\s+R")
