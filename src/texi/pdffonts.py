@@ -208,6 +208,25 @@ def _content_names(stream: bytes) -> set[bytes]:
     return names
 
 
+def _delete_dict_key(doc: pymupdf.Document, owner: int, key: str) -> None:
+    """Delete the entry itself, not a PDF null value (rejected by pdfTeX).
+
+    xref_set_key(..., "null") can leave nested font dictionary entries behind.
+    Use MuPDF's dictionary API so direct and shared indirect dictionaries both
+    lose the key entirely, without editing serialized PDF syntax.
+    """
+    mu = pymupdf.mupdf
+    pdf = mu.PdfDocument(doc.this)
+    obj = mu.pdf_load_object(pdf, owner)
+    parent_path, _, raw_name = key.rpartition("/")
+    parent = mu.pdf_dict_getp(obj, parent_path) if parent_path else obj
+    decoded_name = re.sub(
+        rb"#([0-9a-fA-F]{2})", lambda m: bytes([int(m[1], 16)]), raw_name.encode()
+    ).decode("utf-8")
+    mu.pdf_dict_dels(parent, decoded_name)
+    mu.pdf_update_object(pdf, owner, obj)
+
+
 def remove_unused_empty_font(doc: pymupdf.Document, font: Type3Font) -> None:
     """Remove only a truly empty font whose resource names never occur in content.
 
@@ -291,7 +310,7 @@ def remove_unused_empty_font(doc: pymupdf.Document, font: Type3Font) -> None:
                 prefix = ""
         edits.add((owner, prefix + "/" + raw_name if prefix else raw_name))
     for owner, key in edits:
-        doc.xref_set_key(owner, key, "null")
+        _delete_dict_key(doc, owner, key)
 
 
 # --- outline conversion ------------------------------------------------------
@@ -542,7 +561,7 @@ def suggestion_text(*, native_tex: bool = False) -> list[str]:
     lines = [
         "ACM does not accept Type 3 fonts.",
         'For matplotlib figures: plt.rcParams["pdf.fonttype"] = 42, then re-export the figure.',
-        "For vector glyphs: texi pdf-fonts outline; for a matching scalable font file: texi pdf-fonts substitute.",
+        "Use texi pdf-fonts substitute with a matching scalable font file, or texi pdf-fonts outline for vector glyphs.",
     ]
     if native_tex:
         lines.append(

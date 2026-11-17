@@ -10,15 +10,15 @@ Type 3 fonts are rejected by venues such as ACM. These commands inspect their so
 
 ## Check
 
-`check` reports each Type 3 font's name, pages, classification, glyph counts and source evidence. It is read-only and exits 1 when Type 3 fonts remain or a PDF cannot be inspected; otherwise it exits 0.
+`check` reports each Type 3 font once, stripping its subset prefix (for example, `BMQQDV+DejaVuSans` becomes `DejaVuSans`). Each entry lists the PDFs and their 1-based page numbers as a comma-separated list, together with classifications, distinct glyph-name counts and available source evidence. PDFs without Type 3 fonts are summarized in one passing count rather than listed individually. It is read-only and exits 1 when Type 3 fonts remain or a PDF cannot be inspected; otherwise it exits 0.
 
 With no paths, texi reads the build's `.fls` recorder, checks the built project PDF when present, and checks its included PDF inputs. Explicit paths can be checked without a project. When a project recorder is available, texi uses it for source attribution even with explicit paths.
 
-Advice depends on evidence:
+One hint appears after the complete font list and before the passing-PDF summary: run `texi pdf-fonts substitute` to substitute with matching scalable fonts, followed by `texi pdf-fonts outline` to convert vector glyphs and remove unreferenced resources. Source-specific advice is deduplicated into the same hint and depends on evidence:
 
 - **Included PDF:** report the source figure and recommend re-exporting or repairing it. For matplotlib figures, use `plt.rcParams["pdf.fonttype"] = 42` before re-exporting. Changing the document's TeX fonts does not repair an included figure.
 - **Native TeX font:** recommend scalable TeX fonts and rebuilding only when the font is in the built document, its name matches a recorded TeX PK input, and the PDF input scan can rule out an included source. An included match takes precedence over a matching PK name.
-- **Uncertain:** report the uncertainty without recommending scalable TeX fonts. A missing recorder, unreadable PDF inputs, external PostScript inputs, a name-only match or an unsupported glyph definition does not establish native origin.
+- **Unproven native origin:** omit the generic origin warning and recommend substitution before outline conversion, without recommending scalable TeX fonts. A missing recorder, unreadable PDF inputs, external PostScript inputs, a name-only match or an unsupported glyph definition does not establish native origin.
 
 Included-font attribution compares font definitions, character encoding, advance widths, matrices and decompressed glyph programs, not just names. Matching is intentionally conservative; rewritten or resource-dependent glyph programs can remain uncertain.
 

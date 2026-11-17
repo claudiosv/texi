@@ -2643,10 +2643,62 @@ def _pdf_display_path(path: Path) -> str:
     )
 
 
+def _print_pdf_font_group(
+    name: str,
+    occurrences: list[tuple[Path, pdffonts.Type3Font, pdffont_sources.Source]],
+) -> None:
+    kinds = sorted({font.kind or "unclassified" for _, font, _ in occurrences})
+    glyphs: dict[str, set[str]] = {}
+    locations: dict[Path, set[int]] = {}
+    source_files: dict[str, set[Path]] = {}
+    reasons: dict[str, set[str]] = {}
+    for pdf, font, source in occurrences:
+        locations.setdefault(pdf, set()).update(font.pages)
+        for glyph, kind in font.glyph_kinds.items():
+            glyphs.setdefault(kind, set()).add(glyph)
+        if source.kind != "empty" and (source.kind != "unknown" or source.files):
+            source_files.setdefault(source.kind, set()).update(source.files)
+            reasons.setdefault(source.kind, set()).add(source.reason)
+    description = ", ".join(kinds)
+    if glyphs:
+        description += "; glyphs: " + ", ".join(
+            f"{len(names)} {kind}" for kind, names in sorted(glyphs.items())
+        )
+    if "unknown" in kinds:
+        description += "; unrecognized drawing instructions, not classified as bitmap"
+    if "empty" in kinds and any(not font.glyph_kinds for _, font, _ in occurrences):
+        description += "; empty glyph dictionary (no glyph programs)"
+    console.print(
+        f"[orange1]•[/orange1] [bold]{escape(name)}[/bold]  {escape(description)}"
+    )
+    found_in = []
+    for pdf, pages in locations.items():
+        label = "page" if len(pages) == 1 else "pages"
+        found_in.append(
+            f"{_pdf_display_path(pdf)} ({label} {', '.join(map(str, sorted(pages)))})"
+        )
+    console.print(f"  {escape(', '.join(found_in))}")
+    for kind, files in source_files.items():
+        label = {
+            "native": "native TeX font",
+            "included": "included PDF",
+            "empty": "empty resource",
+            "unknown": "possible included PDF",
+        }[kind]
+        paths = ", ".join(_pdf_display_path(p) for p in sorted(files))
+        evidence = "; ".join(sorted(reasons[kind]))
+        console.print(
+            f"[dim]  Source: {label}{': ' + escape(paths) if paths else ''}. {escape(evidence)}.[/dim]"
+        )
+
+
 def _check_pdf_fonts(pdfs: list[Path] | None) -> None:
     paths, build = _pdf_font_paths(pdfs, include_built=True)
     sources = pdffont_sources.FontSources(build)
-    found = False
+    groups: dict[
+        str, list[tuple[Path, pdffonts.Type3Font, pdffont_sources.Source]]
+    ] = {}
+    clean = 0
     for pdf in paths:
         try:
             fonts = pdffonts.classify(pdf)
@@ -2657,30 +2709,33 @@ def _check_pdf_fonts(pdfs: list[Path] | None) -> None:
             )
             raise typer.Exit(code=1) from e
         if not fonts:
-            console.print(
-                f"[green]✔ {escape(_pdf_display_path(pdf))}: no Type 3 fonts[/green]"
-            )
+            clean += 1
             continue
-        found = True
-        console.print(
-            f"[orange1]⚠ {len(fonts)} Type 3 font(s) in {escape(_pdf_display_path(pdf))}:[/orange1]"
-        )
         for font in fonts:
-            _print_type3_report([font])
-            source = origins[font.xref]
-            files = ", ".join(_pdf_display_path(p) for p in source.files)
-            label = {
-                "native": "native TeX font",
-                "included": "included PDF",
-                "empty": "empty resource",
-                "unknown": "uncertain",
-            }[source.kind]
-            console.print(
-                f"[dim]  Source: {label}{': ' + escape(files) if files else ''}. {escape(source.reason)}.[/dim]"
-            )
-            for line in pdffont_sources.advice(source, font):
-                console.print(f"[dim]  {escape(line)}[/dim]")
-    if found:
+            name = re.sub(r"^[A-Z]{6}\+", "", font.name)
+            groups.setdefault(name, []).append((pdf, font, origins[font.xref]))
+    if groups:
+        console.print(f"[orange1]⚠ {len(groups)} Type 3 font(s):[/orange1]")
+    for name, occurrences in groups.items():
+        _print_pdf_font_group(name, occurrences)
+    if groups:
+        hints = dict.fromkeys([
+            "Run texi pdf-fonts substitute to substitute with matching scalable fonts, followed by texi pdf-fonts outline to convert vector glyphs and remove unreferenced resources.",
+            *(
+                hint
+                for occurrences in groups.values()
+                for _, font, source in occurrences
+                for hint in pdffont_sources.advice(source, font)
+            ),
+        ])
+        console.print(f"[dim]Hint: {escape(' '.join(hints))}[/dim]")
+    if clean:
+        other = " other" if groups else ""
+        plural = "s" if clean != 1 else ""
+        console.print(
+            f"[green]✔ Checked {clean}{other} PDF{plural} and found no Type 3 fonts[/green]"
+        )
+    if groups:
         raise typer.Exit(code=1)
 
 

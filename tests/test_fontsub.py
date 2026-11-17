@@ -375,6 +375,7 @@ def test_unused_empty_resource_cleanup_without_font_file(
     assert not pdffonts.find_type3(out)
     with pymupdf.open(out) as doc:
         assert doc[0].get_pixmap().samples == before
+        assert "/Unused" not in pdffonts._resolve(doc, doc[0].xref, "Resources/Font")
     assert pdffonts.find_type3(src)
 
 
@@ -465,3 +466,78 @@ def test_matplotlib_lookup_exact_and_deduplicates_cache(
         font.save(two / "regular.ttf")
     with pytest.raises(ValueError, match="found 2"):
         fontsub.find_font("MatplotlibFace")
+
+
+@pytest.mark.parametrize("indirect", [False, True])
+@pytest.mark.parametrize("alias", ["Unused", "F#2F2"])
+def test_cleanup_deletes_font_entry_not_null(
+    tmp_path: Path,
+    indirect: bool,
+    alias: str,
+) -> None:
+    src = make_pdf(tmp_path / "source.pdf", None)
+    name = add_empty_font(src)
+    font = pdffonts.find_type3(src)[0]
+    with pymupdf.open(src) as doc:
+        resource = int(doc.xref_get_key(doc[0].xref, "Resources")[1].split()[0])
+        existing_font = doc[0].get_fonts()[0][0]
+        dictionary = f"<</helv {existing_font} 0 R/{alias} {font.xref} 0 R>>"
+        if indirect:
+            dictionary_xref = doc.get_new_xref()
+            doc.update_object(dictionary_xref, dictionary)
+            doc.xref_set_key(resource, "Font", f"{dictionary_xref} 0 R")
+        else:
+            doc.xref_set_key(resource, "Font", dictionary)
+        # Both pages share the same font dictionary; aliases must be removed once.
+        page = doc.new_page()
+        doc.xref_set_key(page.xref, "Resources", f"{resource} 0 R")
+        doc.saveIncr()
+    out = tmp_path / "out.pdf"
+    assert fontsub.substitute_font(src, out, name) == 0
+    with pymupdf.open(out) as doc:
+        for page in doc:
+            dictionary = pdffonts._resolve(doc, page.xref, "Resources/Font")
+            assert "/helv" in dictionary
+            assert "null" not in dictionary
+            assert "/Unused" not in dictionary and "/F#2F2" not in dictionary
+    assert not pdffonts.find_type3(out)
+
+
+def test_cleaned_font_resource_can_be_included_by_pdftex(tmp_path: Path) -> None:
+    import os
+    import shutil
+    import subprocess
+
+    binary = os.environ.get("TEXI_PDFTEX") or shutil.which("pdftex")
+    if not binary:
+        pytest.skip(
+            "pdftex not installed; set TEXI_PDFTEX for the inclusion regression"
+        )
+    src = make_pdf(tmp_path / "source.pdf", None)
+    name = add_empty_font(src)
+    out = tmp_path / "cleaned.pdf"
+    fontsub.substitute_font(src, out, name)
+    tex = tmp_path / "include.tex"
+    tex.write_text(
+        "\\catcode123=1 \\catcode125=2\n\\pdfoutput=1\n"
+        "\\pdfpagewidth=500pt \\pdfpageheight=500pt\n"
+        "\\pdfximage{cleaned.pdf}\n"
+        "\\setbox0=\\hbox{\\pdfrefximage\\pdflastximage}\n"
+        "\\shipout\\box0\n\\end\n"
+    )
+    result = subprocess.run(
+        [
+            binary,
+            "-ini",
+            "-interaction=nonstopmode",
+            "-halt-on-error",
+            "-no-shell-escape",
+            tex.name,
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (tmp_path / "include.pdf").is_file()

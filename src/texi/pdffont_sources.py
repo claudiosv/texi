@@ -194,10 +194,6 @@ def advice(source: Source, font: pdffonts.Type3Font) -> list[str]:
             "Prefer pdflatex or lualatex to the dvips/ps2pdf bitmap-font path."
         )
         return lines
-    if source.kind == "empty":
-        return [
-            "texi pdf-fonts outline can remove this resource if no content references it."
-        ]
     lines = []
     if source.kind == "included":
         lines.append(
@@ -207,11 +203,4 @@ def advice(source: Source, font: pdffonts.Type3Font) -> list[str]:
             lines.append(
                 'matplotlib: plt.rcParams["pdf.fonttype"] = 42; re-export the figure.'
             )
-    else:
-        lines.append(
-            "Font origin is uncertain; inspect the source before choosing a font replacement."
-        )
-    lines.append(
-        "Use texi pdf-fonts outline for vector glyphs, or texi pdf-fonts substitute with a matching scalable font file."
-    )
     return lines

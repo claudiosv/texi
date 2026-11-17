@@ -6,7 +6,7 @@ import pymupdf
 import pytest
 from typer.testing import CliRunner
 
-from texi import cli, pdffonts, pdffont_sources
+from texi import cli, pdffonts
 from texi.config import TexProjectConfig
 from test_fontsub import add_empty_font, make_font
 from test_pdffonts import BITMAP, VECTOR_A, VECTOR_B, make_pdf
@@ -181,7 +181,9 @@ def test_native_font_requires_positive_evidence(
     (tmp_path / config.build.aux_dir / f"{config.jobname}.fls").unlink()
     result = CliRunner().invoke(cli.app, ["pdf-fonts", "check", str(built)])
     assert result.exit_code == 1
-    assert "uncertain" in result.output
+    assert "Source: uncertain" not in result.output
+    assert "native TeX origin has not been established" not in result.output
+    assert "Font origin is uncertain" not in result.output
     assert "cm-super" not in result.output
 
 
@@ -211,7 +213,9 @@ def test_ambiguous_sources_do_not_recommend_tex_fonts(
     named_font(built, "cmr10")
     result = CliRunner().invoke(cli.app, ["pdf-fonts", "check", str(built)])
     assert result.exit_code == 1
-    assert "uncertain" in result.output
+    assert "Source: uncertain" not in result.output
+    assert "native TeX origin has not been established" not in result.output
+    assert "Font origin is uncertain" not in result.output
     assert "cm-super" not in result.output
 
 
@@ -230,3 +234,101 @@ def test_removed_commands_are_unavailable(command: str) -> None:
     result = CliRunner().invoke(cli.app, [command, "--help"])
     assert result.exit_code == 2
     assert "No such command" in result.output
+
+
+def test_check_groups_subsets_files_pages_and_passing_count(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    first = make_pdf(tmp_path / "first.pdf", {"A": VECTOR_A, "B": VECTOR_B})
+    second = make_pdf(tmp_path / "b.pdf", {"A": VECTOR_A, "B": VECTOR_B})
+    named_font(first, "BMQQDV+DejaVuSans")
+    named_font(second, "GCWXDV+DejaVuSans")
+    clean_one = make_pdf(tmp_path / "clean-one.pdf", None)
+    clean_two = make_pdf(tmp_path / "clean-two.pdf", None)
+    combined = tmp_path / "a.pdf"
+    with (
+        pymupdf.open() as doc,
+        pymupdf.open(first) as used,
+        pymupdf.open(clean_one) as clean,
+    ):
+        doc.insert_pdf(used)
+        doc.insert_pdf(clean)
+        doc.insert_pdf(used)
+        doc.save(combined)
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "pdf-fonts",
+            "check",
+            str(combined),
+            str(second),
+            str(clean_one),
+            str(clean_two),
+            str(clean_one),
+        ],
+    )
+    assert result.exit_code == 1, result.output
+    assert result.output.count("DejaVuSans") == 1
+    assert "BMQQDV+" not in result.output and "GCWXDV+" not in result.output
+    assert "a.pdf (pages 1, 3), b.pdf (page 1)" in result.output
+    assert "glyphs: 2 vector" in result.output
+    assert "Checked 2 other PDFs and found no Type 3 fonts" in result.output
+    assert "clean-one.pdf" not in result.output and "clean-two.pdf" not in result.output
+    assert "Source: uncertain" not in result.output
+    assert "native TeX origin has not been established" not in result.output
+    assert "Font origin is uncertain" not in result.output
+    hint = " ".join(result.output.split())
+    assert hint.index("texi pdf-fonts substitute") < hint.index(
+        "texi pdf-fonts outline"
+    )
+
+
+@pytest.mark.parametrize("count", [1, 2])
+def test_check_all_passing_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    count: int,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    paths = [make_pdf(tmp_path / f"clean-{i}.pdf", None) for i in range(count)]
+    result = CliRunner().invoke(cli.app, ["pdf-fonts", "check", *map(str, paths)])
+    assert result.exit_code == 0, result.output
+    plural = "s" if count != 1 else ""
+    assert f"Checked {count} PDF{plural} and found no Type 3 fonts" in result.output
+    assert "other" not in result.output
+    assert all(path.name not in result.output for path in paths)
+
+
+def test_check_one_hint_after_all_fonts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    first = make_pdf(tmp_path / "one.pdf", {"A": VECTOR_A, "B": VECTOR_B})
+    second = make_pdf(tmp_path / "two.pdf", None)
+    named_font(first, "ABCDEF+FirstFont")
+    add_empty_font(second)
+    clean = make_pdf(tmp_path / "clean.pdf", None)
+    result = CliRunner().invoke(
+        cli.app, ["pdf-fonts", "check", str(first), str(second), str(clean)]
+    )
+    assert result.exit_code == 1, result.output
+    output = " ".join(result.output.split())
+    assert output.count("Hint:") == 1
+    assert output.index("Hint:") > output.index("EmptyTest")
+    assert output.index("Hint:") < output.index("Checked 1 other PDF")
+    assert "Source: empty resource" not in output
+    assert output.count("texi pdf-fonts substitute") == 1
+    assert output.count("texi pdf-fonts outline") == 1
+    assert (
+        "Run texi pdf-fonts substitute to substitute with matching scalable fonts, followed by texi pdf-fonts outline to convert vector glyphs and remove unreferenced resources."
+        in output
+    )
+
+
+def test_check_clean_pdfs_have_no_hint(tmp_path: Path) -> None:
+    path = make_pdf(tmp_path / "clean.pdf", None)
+    result = CliRunner().invoke(cli.app, ["pdf-fonts", "check", str(path)])
+    assert result.exit_code == 0
+    assert "Hint:" not in result.output
