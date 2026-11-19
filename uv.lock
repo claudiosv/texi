@@ -952,16 +952,24 @@ wheels = [
 [[package]]
 name = "pyclack-cli"
 version = "0.4.1"
-source = { directory = "/Users/claudio/Projects/pyclack-rich" }
+source = { git = "https://github.com/claudiosv/pyclack-rich#3e7f6b48b7ffe43f17e3ce8ff4fee6fda1d99149" }
 dependencies = [
     { name = "readchar" },
     { name = "rich" },
 ]
 
-[package.optional-dependencies]
-all = []
-core = []
-prompts = []
+[package.metadata]
+requires-dist = [
+    { name = "readchar" },
+    { name = "readchar", marker = "extra == 'all'" },
+    { name = "readchar", marker = "extra == 'core'" },
+    { name = "readchar", marker = "extra == 'prompts'" },
+    { name = "rich", specifier = ">=15" },
+    { name = "rich", marker = "extra == 'all'", specifier = ">=15" },
+    { name = "rich", marker = "extra == 'core'", specifier = ">=15" },
+    { name = "rich", marker = "extra == 'prompts'", specifier = ">=15" },
+]
+provides-extras = ["core", "prompts", "all"]
 
 [[package]]
 name = "pycparser"

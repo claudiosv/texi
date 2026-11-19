@@ -42,7 +42,7 @@ texi = "texi.cli:app"
 module-name = "texi"
 
 [tool.uv.sources]
-pyclack-cli = { path = "/Users/claudio/Projects/pyclack-rich" }
+pyclack-cli = { git = "https://github.com/claudiosv/pyclack-rich" }
 
 [build-system]
 build-backend = "uv_build"
