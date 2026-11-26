@@ -1,6 +1,6 @@
 [project]
 name = "texi-cli"
-version = "0.1.0"
+version = "1.0"
 description = "An isolated workspace manager for LaTeX projects."
 readme = "README.md"
 license = "MIT"
