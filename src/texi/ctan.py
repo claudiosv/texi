@@ -27,10 +27,10 @@ from pathlib import Path
 from typing import Any, Self
 from urllib.parse import quote
 
-lazy import httpx2
-lazy from hishel import SqliteStorage
-lazy from hishel.httpx2 import CacheTransport
-lazy from pydantic import (
+import httpx2
+from hishel import SqliteStorage
+from hishel.httpx2 import CacheTransport
+from pydantic import (
     AliasChoices,
     BaseModel,
     ConfigDict,

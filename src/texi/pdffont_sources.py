@@ -5,7 +5,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-lazy import pymupdf
+import pymupdf
 
 from texi import latexmk_files, pdffonts
 

@@ -1,10 +1,10 @@
 import asyncio
+import functools
 import getpass
 import hashlib
 import json
 import os
 import re
-import functools
 import shlex
 import shutil
 import sqlite3
@@ -19,19 +19,15 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
-lazy import inflect
-lazy import sh
-lazy import typer
-lazy from pyclack.core import ShimmerProgress, is_cancel
-lazy from pyclack.prompts import Option, confirm, note, outro, select
-lazy from pyclack.utils.console import console
-lazy from pyclack.utils.styling import S_BAR_START, Color
-lazy from pydantic import ValidationError
-lazy from rich.filesize import decimal
-lazy from rich.markup import escape
-lazy from rich.table import Table
-lazy from rich.text import Text
-lazy from rich.tree import Tree
+import inflect
+import sh
+import typer
+from pydantic import ValidationError
+from rich.filesize import decimal
+from rich.markup import escape
+from rich.table import Table
+from rich.text import Text
+from rich.tree import Tree
 
 from texi import (
     archive,
@@ -42,17 +38,21 @@ from texi import (
     latexmk_files,
     logparse_bib,
     lsr,
-    pdffonts,
     pdffont_sources,
-    tlactions,
+    pdffonts,
     runaway,
     texenv,
     texfmt,
     texscan,
+    tlactions,
     tools,
 )
 from texi import tlpdb as tlpdb_mod
 from texi import unused as unused_mod
+from texi._vendor.pyclack.core import ShimmerProgress, is_cancel
+from texi._vendor.pyclack.prompts import Option, confirm, note, outro, select
+from texi._vendor.pyclack.utils.console import console
+from texi._vendor.pyclack.utils.styling import S_BAR_START, Color
 from texi.config import (
     BuildConfig,
     GoMode,

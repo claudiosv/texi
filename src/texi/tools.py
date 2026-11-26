@@ -1,6 +1,6 @@
 """Thin `sh` wrappers around the TeX Live maintenance tools."""
 
-lazy import sh
+import sh
 
 _ENGINE_FMT = {
     "pdflatex": ("pdftex", "pdflatex.fmt"),

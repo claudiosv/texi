@@ -9,14 +9,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
-lazy import typer
-lazy from pyclack.utils.console import console
-lazy from rich.console import Console
-lazy from rich.markup import escape
-lazy from rich.table import Table
-lazy from rich.text import Text
+import typer
+from rich.console import Console
+from rich.markup import escape
+from rich.table import Table
+from rich.text import Text
 
 from texi import tlpdb as tl
+from texi._vendor.pyclack.utils.console import console
 
 cache_app = typer.Typer(
     help="Inspect the TeX Live package database and manage the package cache.",

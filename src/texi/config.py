@@ -2,7 +2,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
-lazy from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class PdfMode(StrEnum):

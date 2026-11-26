@@ -40,7 +40,7 @@ All commands accept `--debug` where it makes sense.
 ## Installation
 
 ```bash
-uv tool install texi-cli
+uv tool install --python 3.14 texi-cli
 ```
 
 ### Shell completion

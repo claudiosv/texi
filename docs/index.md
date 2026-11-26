@@ -26,7 +26,7 @@ Texi installs a minimal, standalone TeX Live tree for each LaTeX project, so no 
 ## Install
 
 ```bash
-uv tool install texi-cli
+uv tool install --python 3.14 texi-cli
 ```
 
 Run `texi doctor` to check your setup.

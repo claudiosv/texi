@@ -25,7 +25,7 @@ import zlib
 from collections.abc import Callable
 from pathlib import Path
 
-lazy import httpx2
+import httpx2
 
 from texi import archive, tlpdb
 

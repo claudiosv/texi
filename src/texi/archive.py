@@ -46,7 +46,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-lazy import httpx2
+import httpx2
 
 from texi import resolver, tlactions, tlpdb
 
