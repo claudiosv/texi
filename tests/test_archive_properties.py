@@ -9,7 +9,7 @@ from hypothesis import example, given, settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule
 
-from texi import archive, resolver
+from texi import archive, resolver, texenv
 from texi import tlpdb as tl
 
 # --- store ids and paths ------------------------------------------------------
@@ -19,7 +19,6 @@ revisions = st.integers(0, 10**7).map(str)
 checksums = st.text("0123456789abcdef", min_size=7, max_size=128)
 
 
-# Names with a path separator are excluded: see the traversal xfail.
 @given(name=package_names, revision=revisions, checksum=checksums)
 def test_archive_id_is_one_store_directory(
     name: str, revision: str, checksum: str
@@ -28,6 +27,52 @@ def test_archive_id_is_one_store_directory(
     assert ident == f"{name}-{revision}-{checksum[:7]}"
     assert Path(ident).parts == (ident,)
     assert ident != ".."
+
+
+# Anything an index could put in a field, with path and URL syntax favoured.
+hostile = st.one_of(
+    st.text(max_size=20),
+    st.text("a1./\\?#% \n\x00", max_size=12),
+    st.sampled_from(["", ".", "..", "../../x", "/etc", "a/b", "1" * 300]),
+)
+
+
+@given(
+    name=st.one_of(package_names, hostile),
+    revision=st.one_of(revisions, hostile),
+    checksum=st.one_of(checksums, hostile),
+)
+def test_archive_id_is_safe_or_refused(name: str, revision: str, checksum: str) -> None:
+    try:
+        ident = archive.archive_id(name, revision, checksum)
+    except archive.ArchiveError:
+        return
+    assert Path(ident).parts == (ident,)
+    assert not set(ident) & set("/\\?#% \n\x00")
+    assert not name.startswith(".")
+    assert revision.isascii() and revision.isdigit()
+    assert set(checksum) <= set("0123456789abcdefABCDEF")
+
+
+@given(name=hostile.filter(lambda n: not archive._NAME_RE.fullmatch(n)))
+@example(name="../../x")
+def test_an_unsafe_name_never_touches_a_tree(name: str) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        env = Path(tmp, "a", "b", "env")
+        (env / "tlpkg" / "tlpobj").mkdir(parents=True)
+        before = sorted(Path(tmp).rglob("*"))
+        tree = archive.Tree(env, standalone=False)
+        pkg = tl.TlPackage(name, "Collection", "1")
+        entry = archive.Entry("e", name, "1", "r", "c", Path(tmp, "store"))
+        for operation in (
+            lambda: tree.record(pkg),
+            lambda: tree.install(pkg, entry),
+            lambda: tree.uninstall(name),
+        ):
+            with pytest.raises(archive.ArchiveError):
+                operation()
+        assert archive.installed_revision(env, name) is None
+        assert sorted(Path(tmp).rglob("*")) == before
 
 
 segments = st.sampled_from(["a", "b", "..", ".", "", "...", "..a", "a b", "~"])
@@ -47,23 +92,26 @@ def test_checked_path_is_rejected_or_stays_lexically_inside(rel: str) -> None:
         path = archive._checked(env, rel)
     except archive.ArchiveError:
         parts = rel.split("/")
-        assert not rel or rel.startswith("/") or ".." in parts
+        assert (
+            not Path(rel).parts
+            or rel.startswith("/")
+            or ".." in parts
+            or "\x00" in rel
+            or rel.splitlines() != [rel]
+        )
         return
     assert ".." not in path.parts
     assert path.is_relative_to(env)
-    if Path(rel).parts:  # "." names env itself: see the xfail
-        assert path != env
+    assert path != env
 
 
 # --- render_stanza ------------------------------------------------------------
 
-# Words with hyphens or over 70 characters are excluded: see the wrapping xfails.
-long_words = st.text("abcXYZ019.,;:()'\"=", min_size=1, max_size=70)
+long_words = st.text("abcXYZ019.,;:()'\"=-", min_size=1, max_size=100)
 sentences = st.lists(long_words, max_size=30).map(" ".join)
 words = st.from_regex(r"[A-Za-z0-9_./:-]{1,12}", fullmatch=True)
-# Empty attribute values are excluded: see the xfail.
 attr_values = st.lists(
-    st.from_regex(r"[A-Za-z0-9_.-]{1,8}", fullmatch=True), min_size=1, max_size=3
+    st.from_regex(r"[A-Za-z0-9_.-]{1,8}", fullmatch=True), max_size=3
 ).map(" ".join)
 file_paths = st.builds(
     lambda root, parts: root + "/".join(parts),
@@ -148,6 +196,36 @@ def test_render_stanza_round_trips(pkg: tl.TlPackage, standalone: bool) -> None:
         wanted[f"binfiles:{ARCH}"] = [tl.TlFile(f.path) for f in binaries]
     assert got.files == wanted
     assert got.sizes == {k: v for k, v in pkg.sizes.items() if k in wanted}
+
+
+# Every line break except "\n", which cannot be inside a parsed value.
+broken_text = st.text(
+    "ab -\r\x0b\x0c\x1c\x85\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}", max_size=90
+)
+
+
+@given(short=broken_text, long=broken_text, extra=broken_text)
+@example(
+    short="",
+    long="x\N{LINE SEPARATOR}name evil",
+    extra="x\N{LINE SEPARATOR}runfiles\N{LINE SEPARATOR} f",
+)
+def test_render_stanza_writes_no_hidden_lines(
+    short: str, long: str, extra: str
+) -> None:
+    pkg = tl.TlPackage(
+        "a",
+        "Package",
+        "1",
+        shortdesc=short,
+        longdesc=long,
+        fields={"catalogue-license": [extra]},
+    )
+    stanza = archive.render_stanza(pkg, False)
+    lines = stanza.removesuffix("\n").split("\n")
+    assert stanza.splitlines() == lines
+    assert [x for x in lines if x.startswith("name ")] == ["name a"]
+    assert [x for x in lines if x.startswith("runfiles")] == ["runfiles"]
 
 
 # --- installed trees ------------------------------------------------------------
@@ -319,23 +397,52 @@ def test_prune_removes_only_unused_entries_and_old_leftovers(
         assert left == (every if dry_run else every - set(doomed))
 
 
-# --- confirmed bugs -----------------------------------------------------------
+# --- regressions --------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="archive_id does not reject path separators in a name from the index",
-)
 def test_archive_id_cannot_leave_the_store() -> None:
-    ident = archive.archive_id("../../x", "1", "abc")
-    store = "/cache/texi/archive"
-    assert os.path.normpath(f"{store}/{ident}").startswith(store + "/")
+    with pytest.raises(archive.ArchiveError):
+        archive.archive_id("../../x", "1", "abc")
 
 
-@pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason="'.' passes and names env_dir itself"
+@pytest.mark.parametrize(
+    ("name", "revision", "checksum"),
+    [("../../x", "1", "abc"), ("a", "../1", "abc"), ("a", "1", "../../x")],
 )
+def test_fetch_refuses_unsafe_index_data_before_touching_anything(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    revision: str,
+    checksum: str,
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    pkg = tl.TlPackage(
+        name, "Package", revision, fields={"containerchecksum": [checksum]}
+    )
+    with pytest.raises(archive.ArchiveError):
+        archive.fetch(tmp_path.as_uri(), pkg)
+    with pytest.raises(archive.ArchiveError):
+        archive.lookup(tmp_path.as_uri(), pkg)
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("category", ["Package", "Collection"])
+def test_install_packages_reports_an_unsafe_name_as_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, category: str
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    text = f"name ../../x\ncategory {category}\nrevision 1\ncontainerchecksum abc\n"
+    env = tmp_path / "project" / "env"
+    texenv.init_usertree(env)
+    with tl.parse_tlpdb(text) as db:
+        result = archive.install_packages(
+            db, tmp_path.as_uri(), ["../../x"], env, notice=lambda _: None
+        )
+    assert result.failed == ["../../x"]
+    assert not list(tmp_path.rglob("x*"))
+
+
 def test_checked_rejects_the_tree_itself() -> None:
     env = Path("/nonexistent/env")
     try:
@@ -345,11 +452,6 @@ def test_checked_rejects_the_tree_itself() -> None:
     assert path != env
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="_checked is lexical only: a symlinked parent leads outside the tree",
-)
 def test_uninstall_does_not_delete_through_a_symlinked_directory(
     tmp_path: Path,
 ) -> None:
@@ -361,8 +463,69 @@ def test_uninstall_does_not_delete_through_a_symlinked_directory(
     (env / "tlpkg" / "tlpobj" / "p.tlpobj").write_text(
         "name p\nrunfiles\n link/f\n", encoding="utf-8"
     )
-    archive.Tree(env, standalone=False).uninstall("p")
+    assert archive.Tree(env, standalone=False).uninstall("p") == []
     assert (outside / "f").exists()
+
+
+def _package(tmp_path: Path, files: list[str]) -> tuple[tl.TlPackage, archive.Entry]:
+    pkg = tl.TlPackage(
+        "p",
+        "Package",
+        "1",
+        files={"runfiles": [tl.TlFile(f"RELOC/{f}") for f in files]},
+    )
+    path = tmp_path / "entry"
+    (path / "p").mkdir(parents=True)
+    return pkg, archive.Entry("entry", "p", "1", "r", "c", path, files)
+
+
+def test_install_does_not_write_through_a_symlinked_directory(tmp_path: Path) -> None:
+    env, outside = tmp_path / "env", tmp_path / "outside"
+    env.mkdir()
+    outside.mkdir()
+    (outside / "f").write_text("keep", encoding="utf-8")
+    (env / "link").symlink_to(outside)
+    pkg, entry = _package(tmp_path, ["link/f", "link/new/g"])
+    for rel in ("link/f", "link/new/g"):
+        (entry.package_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+        (entry.package_dir / rel).write_text("evil", encoding="utf-8")
+    with pytest.raises(archive.ArchiveError):
+        archive.Tree(env, standalone=False).install(pkg, entry)
+    assert [p.name for p in outside.iterdir()] == ["f"]
+    assert (outside / "f").read_text(encoding="utf-8") == "keep"
+
+
+def test_install_does_not_write_through_a_symlink_it_just_placed(
+    tmp_path: Path,
+) -> None:
+    # A usertree rewrites "../../texmf-dist/" links, so one can end up leaving the tree.
+    env = tmp_path / "project" / "env"
+    env.mkdir(parents=True)
+    pkg, entry = _package(tmp_path, ["bin/arch/out", "bin/arch/out/victim"])
+    (entry.package_dir / "bin" / "arch").mkdir(parents=True)
+    link = entry.package_dir / "bin" / "arch" / "out"
+    # In the store the link leads inside the package; in the tree, above it.
+    link.symlink_to("../../texmf-dist/../esc")
+    for sub in ("texmf-dist", "esc"):
+        (entry.package_dir / sub).mkdir()
+    (entry.package_dir / "esc" / "victim").write_text("evil", encoding="utf-8")
+    (tmp_path / "project" / "esc").mkdir()
+    with pytest.raises(archive.ArchiveError, match="through a symlink"):
+        archive.Tree(env, standalone=False).install(pkg, entry)
+    assert not (tmp_path / "project" / "esc" / "victim").exists()
+    assert not (env / "bin").exists()
+
+
+def test_tlpobj_values_cannot_add_files_to_delete(tmp_path: Path) -> None:
+    env = tmp_path / "env"
+    (env / "tlpkg" / "tlpobj").mkdir(parents=True)
+    (env / "mine").write_text("keep", encoding="utf-8")
+    for brk in ("\N{LINE SEPARATOR}", "\r"):
+        (env / "tlpkg" / "tlpobj" / "p.tlpobj").write_bytes(
+            f"name p\nlongdesc x{brk}runfiles{brk} mine\n".encode()
+        )
+        assert archive.Tree(env, standalone=False).uninstall("p") == []
+        assert (env / "mine").exists()
 
 
 def _round_trip(pkg: tl.TlPackage) -> tl.TlPackage:
@@ -372,29 +535,16 @@ def _round_trip(pkg: tl.TlPackage) -> tl.TlPackage:
     return got
 
 
-@pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason="textwrap splits words over 70 columns"
-)
 def test_render_stanza_keeps_a_long_word_whole() -> None:
     pkg = tl.TlPackage("a", "Package", "1", longdesc="x" * 71)
     assert _round_trip(pkg).longdesc == pkg.longdesc
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="textwrap breaks at hyphens and the parser joins lines with a space",
-)
 def test_render_stanza_keeps_a_hyphenated_word_whole() -> None:
     pkg = tl.TlPackage("a", "Package", "1", longdesc="x" * 60 + " abcde-fghij-klmno")
     assert _round_trip(pkg).longdesc == pkg.longdesc
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="an empty attribute is written unquoted and then read as part of the path",
-)
 def test_render_stanza_keeps_an_empty_file_attribute() -> None:
     with tl.parse_tlpdb('name a\nrunfiles\n RELOC/f details=""\n') as db:
         pkg = db.get("a")

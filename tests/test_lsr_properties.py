@@ -15,10 +15,9 @@ from texi import lsr
 # Distinct even on a case-insensitive filesystem.
 names = st.sampled_from(["a", "b", "c", "Z", ".hidden", "ls-R", ".git", "CVS", "x y"])
 paths = st.lists(names, min_size=1, max_size=3)
-# A symlink points at an earlier directory, at a file, or nowhere. Links to
-# themselves are excluded: see the xfail.
+# A symlink points at an earlier directory, at a file, at itself, or nowhere.
 operations = st.lists(
-    st.tuples(st.sampled_from(["dir", "file", "link"]), paths, st.integers(-2, 20)),
+    st.tuples(st.sampled_from(["dir", "file", "link"]), paths, st.integers(-3, 20)),
     max_size=10,
 )
 
@@ -45,7 +44,9 @@ def build(root: Path, ops: list[tuple[str, list[str], int]]) -> None:
             files.append(path)
         else:
             links += 1
-            if pick == -2:
+            if pick == -3:
+                target = path
+            elif pick == -2:
                 target = root / "nowhere"
             elif pick == -1 and files:
                 target = files[0]
@@ -119,14 +120,9 @@ def test_write_is_stable_and_leaves_no_temporary_file(
         assert target.read_text(encoding="utf-8") == text
 
 
-# --- confirmed bugs -----------------------------------------------------------
+# --- regressions --------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=OSError,
-    reason="DirEntry.is_dir() raises ELOOP outside the try, so LsrError is not used",
-)
 @pytest.mark.parametrize("operation", [lsr.render, lsr.write])
 def test_a_symlink_to_itself_does_not_raise_a_raw_os_error(
     tmp_path: Path, operation: Callable[[Path], object]
@@ -134,3 +130,4 @@ def test_a_symlink_to_itself_does_not_raise_a_raw_os_error(
     (tmp_path / "self").symlink_to("self")
     with contextlib.suppress(lsr.LsrError):
         operation(tmp_path)
+    assert "self" in lsr.render(tmp_path).split("\n")

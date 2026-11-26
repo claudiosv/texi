@@ -31,8 +31,6 @@ def reach(start: str, edges: dict[str, list[str]], allowed: set[str]) -> set[str
 def test_install_order_against_brute_force(
     nodes: set[str], edges: dict[str, list[str]]
 ) -> None:
-    # Edges leaving ``nodes`` are dropped here: see the xfail.
-    edges = {n: [d for d in deps if d in nodes] for n, deps in edges.items()}
     order, cycles = resolver.install_order(nodes, edges)
     assert sorted(order) == sorted(nodes)
     closure = {n: reach(n, edges, nodes) for n in nodes}
@@ -191,13 +189,8 @@ def test_resolve_packages_ignores_input_order(
     assert (one.meta, one.skipped, one.missing) == (two.meta, two.skipped, two.missing)
 
 
-# --- confirmed bugs -----------------------------------------------------------
+# --- regressions --------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="a dependency outside ``nodes`` is walked by Tarjan and ordered too",
-)
 def test_install_order_orders_only_the_given_nodes() -> None:
     assert resolver.install_order({"a"}, {"a": ["b"]})[0] == ["a"]

@@ -47,7 +47,8 @@ def file_owners(env_dir: Path) -> dict[str, str]:
     for stanza in re.split(r"\n\s*\n", text):
         name = None
         in_run = False
-        for line in stanza.splitlines():
+        # not splitlines(): a U+2028 in a longdesc must not start a "name" line
+        for line in stanza.split("\n"):
             if line.startswith("name "):
                 name = line[5:].strip()
             elif line.startswith(" "):
@@ -114,12 +115,10 @@ def analyze(
             rep.not_installed.append(name)
         elif name in used:
             rep.used.append(name)
-        elif categories.get(name) in {"Collection", "Scheme"}:
-            members = sorted((deptree.closure(g, [name]) - {name}) & used)
-            if members:
-                rep.via_collection[name] = members[0]
-            else:
-                rep.unused.append(name)
+        elif categories.get(name) in {"Collection", "Scheme"} and (
+            members := sorted((deptree.closure(g, [name]) - {name}) & used)
+        ):
+            rep.via_collection[name] = members[0]
         elif name in needed_by:
             rep.needed[name] = sorted(needed_by[name])
         else:

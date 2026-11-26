@@ -3,14 +3,14 @@
 import re
 
 import pytest
-from hypothesis import assume, given, settings
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from texi import bibhints, bibparse
 from texi.logparse_core import Diagnostic
 
 # Characters str.splitlines() breaks on but the grammar does not count as a new
-# line: BibFile.lines then drifts from BibEntry.line (see the xfail test).
+# line.
 ODD_BREAKS = "".join(map(chr, [11, 12, 13, 28, 29, 30, 133, 0x2028, 0x2029]))
 
 names = st.from_regex(r"[a-z][a-z0-9]{0,6}", fullmatch=True)
@@ -28,7 +28,13 @@ values = st.recursive(
 )
 entries = st.tuples(types, keys, st.dictionaries(names, values, min_size=1, max_size=4))
 # Text between entries is a comment as far as BibTeX is concerned.
-gaps = st.sampled_from(["\n", "\n\n", "\n\n\n"])
+gaps = st.sampled_from([
+    "\n",
+    "\n\n",
+    "\n\n\n",
+    "\r\n",
+    *(f"x{c}y\n" for c in ODD_BREAKS),
+])
 
 
 @settings(max_examples=60, deadline=None)
@@ -79,9 +85,10 @@ soup = st.lists(
     st.one_of(
         fragments,
         st.text(
-            st.characters(exclude_characters=ODD_BREAKS, exclude_categories=["Cs"]),
+            st.characters(exclude_categories=["Cs"]),
             max_size=6,
         ),
+        st.sampled_from(list(ODD_BREAKS)),
     ),
     max_size=30,
 ).map("".join)
@@ -97,11 +104,6 @@ def test_parse_bib_never_raises_and_lines_stay_in_range(source: str) -> None:
     assert bib.errors == sorted(bib.errors, key=lambda e: (e.line, e.column))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="BibFile.lines uses splitlines(), BibEntry.line counts only newlines",
-)
 @pytest.mark.parametrize(
     "char", [chr(12), chr(0x2028)], ids=["form-feed", "line-separator"]
 )
@@ -181,8 +183,8 @@ def test_explain_never_raises(d: Diagnostic, bibs: dict) -> None:
 def test_a_missing_key_is_not_suggested_for_itself(
     key: str, bibs: dict, source: str
 ) -> None:
-    # A key that a .bib does define is the xfail case below.
-    assume(all(key not in bib.keys for bib in bibs.values()))
+    # A key that a .bib does define gets a "defined at" hint, never a suggestion.
+    defined = any(key in bib.keys for bib in bibs.values())
     d = Diagnostic(
         "warning",
         f'I didn\'t find a database entry for "{key}"',
@@ -191,6 +193,7 @@ def test_a_missing_key_is_not_suggested_for_itself(
     )
     hint = bibhints.explain(d, bibs)
     assert hint is not None
+    assert (f"'{key}' is defined at" in hint) == defined
     if suggested := re.search(r"did you mean (.*)\? Fix", hint):
         offered = re.findall(r"'([^']*)'", suggested[1])
         assert offered
@@ -198,11 +201,6 @@ def test_a_missing_key_is_not_suggested_for_itself(
         assert set(offered) <= {k for bib in bibs.values() for k in bib.keys}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="explain suggests the missing key itself when a .bib read defines it",
-)
 def test_defined_but_reported_missing_key_is_not_suggested() -> None:
     d = Diagnostic(
         "warning",

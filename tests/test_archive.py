@@ -193,8 +193,8 @@ def test_offline_reuse(store: Path) -> None:
 
 
 def test_new_revision_gets_new_dir(store: Path) -> None:
-    a = archive.archive_id("foo", "100", "x")
-    b = archive.archive_id("foo", "101", "x")
+    a = archive.archive_id("foo", "100", "f")
+    b = archive.archive_id("foo", "101", "f")
     assert a != b
 
 

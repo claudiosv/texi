@@ -24,11 +24,11 @@ other_keys = st.one_of(
     st.sampled_from([*texenv.SCRUBBED, "TEXMFHOME", "TEXMFCNF", "HOME"]),
     st.from_regex(r"[A-Z_]{1,10}", fullmatch=True).filter(lambda k: k != "PATH"),
 )
-# PATH is always present and non-empty; without it see the xfail test below
+# PATH may be missing or empty: neither may leave an empty entry behind
 bases = st.builds(
-    lambda env, path: env | {"PATH": path},
+    lambda env, path: env if path is None else env | {"PATH": path},
     st.dictionaries(other_keys, env_values, max_size=8),
-    paths,
+    st.one_of(st.none(), st.just(""), paths),
 )
 
 
@@ -42,7 +42,7 @@ def test_clone_env(arch: str, base: dict[str, str]) -> None:
     assert not set(env) & set(texenv.SCRUBBED)
     first, *rest = env["PATH"].split(os.pathsep)
     assert first == str(root / "bin" / arch)
-    assert rest == base["PATH"].split(os.pathsep)
+    assert rest == (base["PATH"].split(os.pathsep) if base.get("PATH") else [])
     assert "" not in rest
     tex = {k for k in env if k.startswith("TEXMF") and k not in base}
     tex |= {"TEXMFROOT", "TEXMFDIST", "TEXMFHOME", "TEXMFVAR", "TEXMFCNF"}
@@ -54,11 +54,6 @@ def test_clone_env(arch: str, base: dict[str, str]) -> None:
     assert texenv.clone_env(env_dir, arch, base) == env
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="clone_env without a base PATH leaves an empty PATH entry (cwd)",
-)
 @pytest.mark.parametrize(
     "base", [pytest.param({}, id="unset"), pytest.param({"PATH": ""}, id="empty")]
 )

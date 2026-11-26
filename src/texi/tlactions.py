@@ -135,13 +135,18 @@ def _words(line: str, what: str) -> list[str]:
         raise ExecuteError(msg) from e
 
 
+def _args(execute: str) -> str:
+    """What follows the first word of an ``execute`` line ("" for a bare word)."""
+    return "".join(execute.split(None, 1)[1:])
+
+
 def parse_add_format(line: str) -> FormatDef:
     """Parse what follows ``execute AddFormat``.
 
     Raises
     ------
     ExecuteError
-        Unknown key, or ``name``/``engine`` missing.
+        Unknown key, ``name``/``engine`` missing, or either contains ``/``.
     """
     values: dict[str, str] = {}
     for word in _words(line, "AddFormat"):
@@ -156,6 +161,11 @@ def parse_add_format(line: str) -> FormatDef:
     if not values.get("engine"):
         msg = "AddFormat line needs engine=something"
         raise ExecuteError(msg)
+    # "name/engine" identifies a format in the pending-actions file
+    for key in ("name", "engine"):
+        if "/" in values[key]:
+            msg = f"AddFormat {key} must not contain '/': {values[key]}"
+            raise ExecuteError(msg)
     return FormatDef(
         values["name"],
         values["engine"],
@@ -259,7 +269,7 @@ def format_defs(executes: Executes) -> list[tuple[str, FormatDef]]:
     out: list[tuple[str, FormatDef]] = []
     for pkg in sorted(executes):
         out.extend(
-            (pkg, parse_add_format(e.split(None, 1)[1]))
+            (pkg, parse_add_format(_args(e)))
             for e in executes[pkg]
             if _kind(e) == "AddFormat"
         )
@@ -285,7 +295,7 @@ def hyphen_defs(executes: Executes, database: str) -> list[tuple[str, HyphenDef]
     for pkg in sorted(executes):
         for e in executes[pkg]:
             if _kind(e) == "AddHyphen":
-                h = parse_add_hyphen(e.split(None, 1)[1])
+                h = parse_add_hyphen(_args(e))
                 if database in h.databases:
                     out.append((pkg, h))
     return out
@@ -384,7 +394,9 @@ def read_executes(tlpdb: Path) -> dict[str, list[str]]:
         return {}
     out: dict[str, list[str]] = {}
     name = ""
-    for line in text.splitlines():
+    for line in text.split(
+        "\n"
+    ):  # not splitlines(): U+2028 in a longdesc must not start a new line
         if line.startswith("name "):
             name = line[5:].strip()
         elif not line.strip():
@@ -401,7 +413,9 @@ def read_installation_option(tlpdb: Path, key: str) -> str | None:
     except OSError:
         return None
     prefix = f"depend opt_{key}:"
-    for line in text.splitlines():
+    for line in text.split(
+        "\n"
+    ):  # not splitlines(): U+2028 in a longdesc must not start a new line
         if line.startswith(prefix):
             return line[len(prefix) :].strip()
     return None
@@ -440,8 +454,8 @@ class Batch:
             elif kind == "AddFormat":
                 self.formats = True
                 try:
-                    f = parse_add_format(e.split(None, 1)[1])
-                except (ExecuteError, IndexError) as err:
+                    f = parse_add_format(_args(e))
+                except ExecuteError as err:
                     self.problems.append(f"{name}: {err}")
                 else:
                     if enable:
@@ -541,7 +555,7 @@ class _Pending:
                 **{k: set(v) for k, v in names.items()},
                 scripts=[tuple(row) for row in scripts],
             )
-        except (ValueError, OSError, TypeError, AttributeError) as e:
+        except (ValueError, OSError, TypeError, AttributeError, RecursionError) as e:
             raise ExecuteError(
                 f"Cannot read pending post-install actions in {path}: {e}"
             ) from e

@@ -445,7 +445,7 @@ def test_outdated_lists_newer_revisions_and_installs_nothing(
 
 
 def test_sync_refreshes_the_index_unless_no_upgrade(
-    project: Path, monkeypatch: pytest.MonkeyPatch
+    project: Path, shims: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     texenv.init_usertree(project / ".texenv", REPO)
     db = tlpdb.parse_tlpdb(_db_text())
@@ -464,7 +464,7 @@ def test_sync_refreshes_the_index_unless_no_upgrade(
 
 
 def test_sync_says_where_the_index_comes_from(
-    project: Path, monkeypatch: pytest.MonkeyPatch
+    project: Path, shims: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     texenv.init_usertree(project / ".texenv", REPO)
     db = tlpdb.parse_tlpdb(_db_text())
@@ -522,7 +522,9 @@ def test_sync_says_where_the_index_comes_from(
     cli._reset_tlpdb_memo()
 
 
-def test_incremental_build_shows_previous_diagnostics(project: Path, monkeypatch) -> None:
+def test_incremental_build_shows_previous_diagnostics(
+    project: Path, monkeypatch
+) -> None:
     cfg = cli.load_project_config(project / "texproject.toml")
     aux = project / cfg.build.aux_dir
     aux.mkdir(parents=True, exist_ok=True)
@@ -546,6 +548,8 @@ def test_incremental_build_shows_previous_diagnostics(project: Path, monkeypatch
     assert "diagnostics from the last build" in r.output
     assert "undefined" in r.output
 
-    r = runner.invoke(cli.app, ["build", "--full"])  # full rebuild: stale log is ignored
+    r = runner.invoke(
+        cli.app, ["build", "--full"]
+    )  # full rebuild: stale log is ignored
     assert "diagnostics from the last build" not in r.output
     assert "undefined" not in r.output

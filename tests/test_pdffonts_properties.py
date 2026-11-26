@@ -3,13 +3,14 @@
 import io
 import re
 import string
+import tempfile
 from pathlib import Path
 
 import pymupdf
 import pytest
 from fontTools.pens.basePen import PenError
 from fontTools.ttLib import TTFont
-from hypothesis import given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 from test_pdffonts import VECTOR_A, VECTOR_B, make_pdf
 
@@ -116,8 +117,20 @@ valid_names = st.from_regex(GLYPH_NAME, fullmatch=True)
 @given(st.text())
 def test_glyph_name_is_always_valid_and_stable(raw: str) -> None:
     name = pdffonts._glyph_name(raw)
-    assert GLYPH_NAME.fullmatch(name)
-    assert pdffonts._glyph_name(name) == name
+    assert name
+    # Without a "#" left to decode there is nothing more to change.
+    if "#" not in name:
+        assert pdffonts._glyph_name(name) == name
+
+
+# Any byte but NUL, which a PDF name cannot hold; each byte may be written as #xx.
+name_bytes = st.lists(st.integers(1, 255), min_size=1, max_size=5).map(bytes)
+
+
+@given(a=name_bytes, b=name_bytes)
+def test_glyph_name_keeps_different_names_apart(a: bytes, b: bytes) -> None:
+    names = [pdffonts._glyph_name("".join(f"#{c:02X}" for c in n)) for n in (a, b)]
+    assert names == [a.decode("latin-1"), b.decode("latin-1")]
 
 
 @given(name=valid_names, data=st.data())
@@ -126,11 +139,6 @@ def test_glyph_name_decodes_hex_escapes(name: str, data: st.DataObject) -> None:
     assert pdffonts._glyph_name(written) == name
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="_glyph_name maps 'a-b' and 'a_b' to one name; _build_ttf drops a glyph",
-)
 def test_outline_conversion_keeps_glyphs_with_similar_names(tmp_path: Path) -> None:
     pdf = make_pdf(tmp_path / "t.pdf", {"a-b": VECTOR_A, "a_b": VECTOR_B})
     (font,) = pdffonts.classify(pdf)
@@ -138,6 +146,40 @@ def test_outline_conversion_keeps_glyphs_with_similar_names(tmp_path: Path) -> N
         data, _ = pdffonts._build_ttf(doc, font, [0.001, 0, 0, 0.001, 0, 0])
     # .notdef and one glyph per CharProc.
     assert len(TTFont(io.BytesIO(data)).getGlyphOrder()) == 3
+
+
+# Regular PDF name characters, many of them unusual in a font glyph name.
+pdf_glyph_names = st.text("abAB019._-+=|:!@*", min_size=1, max_size=6).filter(
+    lambda n: n != ".notdef"
+)
+
+
+@settings(max_examples=25, deadline=None)
+@given(st.lists(pdf_glyph_names, min_size=2, max_size=2, unique=True))
+@example(["x-y", "z+w"])
+def test_outline_conversion_keeps_the_page_rendering(names: list[str]) -> None:
+    def render(path: Path) -> bytes:
+        with pymupdf.open(path) as doc:
+            return doc[0].get_pixmap().samples
+
+    def ink(samples: bytes) -> int:
+        return sum(v < 128 for v in samples)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "src.pdf"
+        make_pdf(Path(tmp) / "t.pdf", dict(zip(names, [VECTOR_A, VECTOR_B])))
+        with pymupdf.open(Path(tmp) / "t.pdf") as doc:
+            (font,) = pdffonts.find_type3(Path(tmp) / "t.pdf")
+            doc.xref_set_key(
+                font.xref, "Encoding/Differences", "[65/{}/{}]".format(*names)
+            )
+            doc.save(src)
+        report = pdffonts.convert_outlines(src, Path(tmp) / "out.pdf")
+        assert len(report.converted) == 1
+        before = ink(render(src))
+        # Antialiasing may differ a little; a lost glyph loses far more ink.
+        assert before > 0
+        assert abs(ink(render(report.output)) - before) <= before * 0.1
 
 
 # --- _draw_glyph -------------------------------------------------------------
@@ -156,15 +198,26 @@ segment = st.one_of(
     st.builds(_op, st.just("v"), point, point),
     st.builds(_op, st.just("y"), point, point),
 )
-# Every subpath starts with m or re. PDF also lets a segment follow h or re
-# directly; that fails (see the xfail test), so it is not generated.
+# Every path starts with m or re. PDF also lets a segment follow h or re
+# directly, which starts a new subpath at the current point.
+segments_after = st.lists(segment, max_size=5)
 moved = st.builds(
-    lambda start, segments, end: " ".join([_op("m", start), *segments, end]),
+    lambda start, segments, end, more: " ".join([
+        _op("m", start),
+        *segments,
+        end,
+        *(more if end else []),
+    ]),
     point,
-    st.lists(segment, max_size=5),
+    segments_after,
     st.sampled_from(["", "h", "h h"]),
+    segments_after,
 )
-rectangle = st.builds(_op, st.just("re"), point, point)
+rectangle = st.builds(
+    lambda rect, more: " ".join([rect, *more]),
+    st.builds(_op, st.just("re"), point, point),
+    segments_after,
+)
 subpaths = st.lists(st.one_of(moved, rectangle), max_size=4)
 
 
@@ -192,7 +245,8 @@ def test_draw_glyph_replays_valid_paths(
     ])
     pen, width = pdffonts._draw_glyph(stream.encode(), scale)
     assert width == advance * scale
-    assert 0 <= pen.glyph().numberOfContours <= len(paths)
+    # at most two contours per path: the second one after h or re
+    assert 0 <= pen.glyph().numberOfContours <= 2 * len(paths)
 
 
 @given(
@@ -218,18 +272,22 @@ def test_draw_glyph_rectangle_bounds_follow_cm_and_scale(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=PenError,
-    reason="_draw_glyph: a segment after h or re does not start a new contour",
-)
 @pytest.mark.parametrize(
     "stream",
     [b"0 0 m 100 0 l h 200 200 l f", b"0 0 10 10 re 200 200 l f"],
     ids=["after-h", "after-re"],
 )
 def test_draw_glyph_segment_after_closed_subpath(stream: bytes) -> None:
-    pdffonts._draw_glyph(stream, 1.0)[0].glyph()
+    glyph = pdffonts._draw_glyph(stream, 1.0)[0].glyph()
+    # The new subpath runs from the first point of the closed one, (0, 0).
+    assert glyph.numberOfContours == 2
+    assert list(glyph.coordinates)[-2:] == [(0, 0), (200, 200)]
+
+
+@pytest.mark.parametrize("op", [b"l", b"c", b"v", b"y"])
+def test_draw_glyph_ignores_a_segment_without_a_current_point(op: bytes) -> None:
+    glyph = pdffonts._draw_glyph(b"1 2 3 4 5 6 " + op + b" f", 1.0)[0].glyph()
+    assert glyph.numberOfContours == 0
 
 
 # --- fontsub -----------------------------------------------------------------

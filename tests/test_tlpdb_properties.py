@@ -1,14 +1,17 @@
 """Property tests of the tlpdb parser, index, search and ``texi cache`` helpers."""
 
+import hashlib
+import json
+import lzma
 import operator
 import sqlite3
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
 from hypothesis import example, given, settings
 from hypothesis import strategies as st
-from rich.errors import MarkupError
 from typer.testing import CliRunner
 
 from texi import tlpdb as tl
@@ -20,13 +23,12 @@ E_ACUTE_UPPER = chr(0xC9)
 E_ACUTE = chr(0xE9)
 SUPERSCRIPT_TWO = chr(0xB2)
 LINE_SEPARATOR = chr(0x2028)
-#: Characters besides "\n" that str.splitlines treats as a line break. The parser
-#: splits on them and read_system_tlpdb does not (xfail below).
+#: Characters besides "\n" that str.splitlines treats as a line break; no tlpdb
+#: reader may split on them.
 EXTRA_BREAKS = "\r\x0b\x0c\x1c\x1d\x1e\x85" + chr(0x2028) + chr(0x2029)
 
-# Category "No" holds the characters that are isdigit() but that int() rejects,
-# such as superscript two (xfail below). Surrogates cannot occur in decoded text.
-chars = st.characters(exclude_categories=("Cs", "No"))
+# Surrogates cannot occur in decoded text.
+chars = st.characters(exclude_categories=("Cs",))
 keys = st.sampled_from([
     "name",
     "category",
@@ -53,6 +55,11 @@ values = st.one_of(
         "release/2026",
         "x.ARCH",
         "",
+        SUPERSCRIPT_TWO,
+        f"size={SUPERSCRIPT_TWO}",
+        "1" * 5000,
+        "size=" + "1" * 5000,
+        'arch="[/]"',
     ]),
 )
 tlpdb_lines = st.one_of(
@@ -86,10 +93,14 @@ names = st.one_of(
     st.from_regex(r"[a-z][a-z0-9.-]{0,8}", fullmatch=True),
     st.sampled_from(["00texlive.config", "00texlive.installation"]),
 )
-free_text = st.text(st.characters(exclude_categories=("Cs", "No")), max_size=30).filter(
-    lambda s: not set(s) & set(EXTRA_BREAKS + "\n")
-)
-# Trailing space after a revision is excluded: see the _newest_revision xfail.
+free_text = st.lists(
+    st.one_of(
+        st.text(st.characters(exclude_categories=("Cs",)), max_size=8),
+        st.sampled_from([*EXTRA_BREAKS, "name evil", "revision 99999999999"]),
+    ),
+    max_size=5,
+).map(lambda parts: "".join(parts).replace("\n", ""))
+trailing = st.text(" \t\r", max_size=3)
 revisions = st.one_of(st.none(), st.integers(0, 10**9))
 depends = st.lists(
     st.sampled_from(["a", "b.ARCH", "release/2026", "opt_location:__MASTER__"]),
@@ -103,15 +114,15 @@ entries = st.lists(
 
 
 @settings(max_examples=60, deadline=None)
-@given(rows=entries)
+@given(rows=entries, tail=trailing)
 def test_the_three_tlpdb_readers_agree(
-    rows: list[tuple[str, int | None, str, list[str]]],
+    rows: list[tuple[str, int | None, str, list[str]]], tail: str
 ) -> None:
     blocks = []
     for name, revision, desc, deps in rows:
         lines = [f"name {name}", "category Package"]
         if revision is not None:
-            lines.append(f"revision {revision}")
+            lines.append(f"revision {revision}{tail}")
         lines.append(f"longdesc {desc}")
         lines += [f"depend {d}" for d in deps]
         blocks.append(NL.join(lines) + NL)
@@ -135,11 +146,17 @@ def test_the_three_tlpdb_readers_agree(
 
 # --- search -----------------------------------------------------------------
 
-# ASCII only and no NUL: see the non-ASCII and NUL xfails below.
-ALPHABET = "abAB-_%\\\"' *"
+# Letters with a one-to-one case pair, so ``lower()`` in the plain scan is exact.
+NON_ASCII = "".join(map(chr, (0xC9, 0xE9, 0x3A9, 0x3C9, 0x416, 0x436)))
+ALPHABET = "abAB-_%\\\"' *\x00" + NON_ASCII
 words = st.text(ALPHABET, max_size=8)
 docs = st.lists(
-    st.tuples(words, words, words, st.sampled_from(["Package", "Collection"])),
+    st.tuples(
+        words,
+        words,
+        words,
+        st.sampled_from(["Package", "Collection", E_ACUTE_UPPER + "t"]),
+    ),
     max_size=5,
 )
 queries = st.lists(st.text(ALPHABET.strip(), min_size=1, max_size=5), max_size=3).map(
@@ -153,7 +170,7 @@ queries = st.lists(st.text(ALPHABET.strip(), min_size=1, max_size=5), max_size=3
     query=queries,
     in_name=st.booleans(),
     in_desc=st.booleans(),
-    category=st.sampled_from([None, "package", "Collection"]),
+    category=st.sampled_from([None, "package", "Collection", E_ACUTE + "T"]),
 )
 @example(
     rows=[("100%", "a_b", "x\\y", "Package")],
@@ -201,37 +218,54 @@ def test_search_fts_and_like_both_equal_a_plain_scan(
     assert results[0] == sorted(results[0], key=lambda r: (-r[1], r[0]))
 
 
+file_names = st.text("abAB-_%." + NON_ASCII, min_size=1, max_size=6)
+
+
+@settings(max_examples=60, deadline=None)
+@given(paths=st.lists(file_names, max_size=4), query=queries)
+def test_file_search_equals_a_plain_scan(paths: list[str], query: str) -> None:
+    text = NL.join(
+        f"name p{i}\nrunfiles\n RELOC/d/{path}\n" for i, path in enumerate(paths)
+    )
+    with tl.parse_tlpdb(text) as db:
+        hits = db.search(query, in_name=False, in_desc=False, in_files=True)
+    terms = query.lower().split()
+    wanted = {
+        f"p{i}"
+        for i, path in enumerate(paths)
+        if terms and all(t in f"texmf-dist/d/{path}".lower() for t in terms)
+    }
+    assert {h.package.name for h in hits} == wanted
+
+
 # --- repository names -------------------------------------------------------
 
 repo_pieces = st.sampled_from(["ctan", "TLnet", "https://r.example", "x", "/", " "])
 repositories = st.one_of(st.text(), st.lists(repo_pieces, max_size=5).map("".join))
 
 
-def _unstable(repo: str) -> bool:
-    """Inputs where stripping the slash exposes an alias or more whitespace."""
-    s = repo.strip()
-    if s.lower() in {"ctan", "tlnet"}:
-        return False
-    r = s.rstrip("/")
-    return r != r.strip() or r.lower() in {"ctan", "tlnet"}
-
-
 @given(repo=repositories)
 def test_normalize_repository_is_idempotent(repo: str) -> None:
     once = tl.normalize_repository(repo)
     assert not once.endswith("/")
-    if _unstable(repo):  # see the "ctan/" xfail
-        return
+    assert once.lower() not in {"ctan", "tlnet"}
     assert tl.normalize_repository(once) == once
 
 
 # --- texi cache ---------------------------------------------------------------
 
 
-@given(value=st.one_of(st.none(), st.text(chars), st.integers(0, 10**18).map(str)))
+@given(
+    value=st.one_of(
+        st.none(),
+        st.text(chars),
+        st.integers(0, 10**30).map(str),
+        st.sampled_from([SUPERSCRIPT_TWO, "9" * 400, "1" * 5000]),
+    )
+)
 def test_fmt_size_formats_any_field_value(value: str | None) -> None:
     out = tlpdb_cli._fmt_size(value)
-    if value and value.isdigit():
+    if value and value.isdecimal() and len(value) <= 18:
         assert out.endswith(f"({int(value):,} bytes)")
     else:
         assert out == (value or "-")
@@ -263,81 +297,80 @@ def test_cache_search_exits_cleanly(query: list[str], flags: set[str]) -> None:
     assert result.exception is None or isinstance(result.exception, SystemExit)
 
 
-# --- confirmed bugs -----------------------------------------------------------
-
-
-@pytest.mark.xfail(
-    strict=True, raises=ValueError, reason="isdigit() accepts superscript two"
+markup = st.one_of(
+    st.text("ab[]/\\ =:@", max_size=10),
+    st.sampled_from(["[/]", "[bold]", "a\\", "[/bold]"]),
 )
+
+
+@settings(max_examples=60, deadline=None)
+@given(category=markup, revision=markup, arch=markup, key=markup, value=markup)
+def test_index_values_are_never_read_as_markup(
+    category: str, revision: str, arch: str, key: str, value: str
+) -> None:
+    arch = arch.replace(" ", "")
+    key = key.replace(" ", "")
+    text = (
+        f"name a\ncategory {category}\nrevision {revision}\n"
+        f"catalogue-{key} {value}\nx{key} {value}\nshortdesc abc\n"
+        f'binfiles arch="{arch}"\n bin/{value.strip() or "x"}\n'
+    )
+    with tl.parse_tlpdb(text) as db:
+        pkg = db.get("a")
+        assert pkg is not None
+        tlpdb_cli._print_info(db, pkg, show_files=True, all_files=False)
+        tlpdb_cli._print_stats(db)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp, "texlive.tlpdb")
+        path.write_text(text, encoding="utf-8")
+        result = CliRunner().invoke(
+            app, ["cache", "search", "--local", str(path), "abc"]
+        )
+    assert result.exit_code == 0, result.output
+
+
+# --- regressions --------------------------------------------------------------
+
+
 def test_a_superscript_runfiles_size_is_ignored() -> None:
     tl.parse_tlpdb(f"name a\nrunfiles size={SUPERSCRIPT_TWO}\n").close()
 
 
-@pytest.mark.xfail(
-    strict=True, raises=ValueError, reason="isdigit() accepts superscript two"
-)
 def test_a_superscript_revision_is_not_numeric() -> None:
     with tl.parse_tlpdb(f"name a\nrevision {SUPERSCRIPT_TWO}\n") as db:
         assert db.revisions() == {}
 
 
-@pytest.mark.xfail(
-    strict=True, raises=ValueError, reason="isdigit() accepts superscript two"
-)
 def test_system_tlpdb_skips_a_superscript_revision(tmp_path: Path) -> None:
     path = tmp_path / "texlive.tlpdb"
     path.write_text(f"name a\nrevision {SUPERSCRIPT_TWO}\n", encoding="utf-8")
     assert tl.read_system_tlpdb(path).revisions == {}
 
 
-@pytest.mark.xfail(
-    strict=True, raises=ValueError, reason="int() digit limit is not handled"
-)
 def test_an_oversized_size_does_not_break_parsing() -> None:
     tl.parse_tlpdb(f"name a\nrunfiles size={'1' * 5000}\n").close()
 
 
-@pytest.mark.xfail(
-    strict=True, raises=ValueError, reason="isdigit() accepts superscript two"
-)
 def test_fmt_size_keeps_a_superscript_value() -> None:
     assert tlpdb_cli._fmt_size(SUPERSCRIPT_TWO) == SUPERSCRIPT_TWO
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="splitlines() splits a value at U+2028, so it can rename the package",
-)
 def test_a_line_separator_in_longdesc_does_not_rename_the_package() -> None:
     with tl.parse_tlpdb(f"name a\nlongdesc x{LINE_SEPARATOR}name evil\n") as db:
         assert db.names() == ["a"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="_REVISION_LINE rejects a trailing space that both parsers accept",
-)
 def test_newest_revision_allows_trailing_whitespace() -> None:
     text = "name a\nrevision 5 \n"
     with tl.parse_tlpdb(text) as db:
         assert tl._newest_revision(text) == max(db.revisions().values())
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="LIKE folds ASCII case only, so short terms miss non-ASCII capitals",
-)
 def test_short_search_term_is_case_insensitive_beyond_ascii() -> None:
     with tl.parse_tlpdb(f"name a\nshortdesc {E_ACUTE_UPPER}cole\n") as db:
         assert [h.package.name for h in db.search(E_ACUTE + "c")] == ["a"]
 
 
-@pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason="the LIKE fallback folds ASCII only"
-)
 def test_search_without_fts_is_case_insensitive_beyond_ascii(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -346,9 +379,6 @@ def test_search_without_fts_is_case_insensitive_beyond_ascii(
         assert [h.package.name for h in db.search(E_ACUTE + "cole")] == ["a"]
 
 
-@pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason="file search uses ASCII-only LIKE"
-)
 def test_file_search_is_case_insensitive_beyond_ascii() -> None:
     text = f"name a\nrunfiles\n RELOC/{E_ACUTE_UPPER}cole.tex\n"
     with tl.parse_tlpdb(text) as db:
@@ -356,32 +386,43 @@ def test_file_search_is_case_insensitive_beyond_ascii() -> None:
         assert [h.package.name for h in hits] == ["a"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=sqlite3.OperationalError,
-    reason="a NUL in a term of 3+ characters ends the FTS5 string early",
-)
 def test_search_term_with_nul_does_not_leak_sqlite_errors() -> None:
     with tl.parse_tlpdb("name abc\n") as db:
         db.search("abc\x00")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="a slash is stripped after the alias check, so 'ctan/' becomes 'ctan'",
-)
 def test_alias_with_a_trailing_slash_is_resolved() -> None:
     assert tl.normalize_repository("ctan/") == tl.DEFAULT_REPOSITORY
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=MarkupError,
-    reason="the section name from the tlpdb is printed as Rich markup",
-)
 def test_info_prints_a_bracketed_binfiles_arch() -> None:
     with tl.parse_tlpdb('name a\nbinfiles arch="[/]"\n bin/x\n') as db:
         pkg = db.get("a")
         assert pkg is not None
         tlpdb_cli._print_info(db, pkg, show_files=False, all_files=False)
+
+
+def test_an_oversized_revision_does_not_date_the_index() -> None:
+    assert tl._newest_revision(f"revision {'1' * 5000}\nrevision 3\r\n") == 3
+
+
+def test_an_index_of_an_older_schema_is_rebuilt_from_the_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    repo = "https://r.example"
+    key = hashlib.sha1(repo.encode()).hexdigest()
+    cdir = tl.cache_dir()
+    cdir.mkdir(parents=True)
+    text = f"name a\nlongdesc x{LINE_SEPARATOR}name evil\n"
+    (cdir / f"{key}.xz").write_bytes(lzma.compress(text.encode()))
+    (cdir / f"{key}.json").write_text(
+        json.dumps({"fetched": time.time()}), encoding="utf-8"
+    )
+    old = sqlite3.connect(cdir / f"{key}.sqlite")
+    old.execute(f"PRAGMA user_version = {tl.SCHEMA_VERSION - 1}")
+    old.close()
+    with tl.load_remote(repo, verify="none") as db:
+        assert db.from_cache
+        assert db.schema_version == tl.SCHEMA_VERSION
+        assert db.names() == ["a"]

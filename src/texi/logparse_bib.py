@@ -76,8 +76,8 @@ def biber_temp_sources(bcf_text: str) -> dict[str, str]:
     import hashlib
 
     return {
-        hashlib.md5(name.strip().encode()).hexdigest(): name.strip()
-        for name in _BCF_SOURCE.findall(bcf_text)
+        hashlib.md5(name.encode("utf-8", "surrogatepass")).hexdigest(): name
+        for name in map(str.strip, _BCF_SOURCE.findall(bcf_text))
     }
 
 

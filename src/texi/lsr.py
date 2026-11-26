@@ -17,6 +17,7 @@ a directory is free, so entries are sorted to make the file reproducible.
 
 from __future__ import annotations
 
+import errno
 import os
 import tempfile
 from collections.abc import Iterable
@@ -58,7 +59,14 @@ def _listing(root: Path) -> list[tuple[str, list[str]]]:
             names = sorted([*names, NAME])  # the file we are about to write
         out.append((label, names))
         for e in entries:
-            if e.is_dir():  # follows symlinks
+            try:
+                is_dir = e.is_dir()  # follows symlinks
+            except OSError as err:
+                if err.errno == errno.ELOOP:  # a link to itself leads nowhere
+                    continue
+                msg = f"cannot read {e.path}: {err}"
+                raise LsrError(msg) from err
+            if is_dir:
                 walk(Path(e.path), f"{label}/{e.name}")
         active.discard(real)
 

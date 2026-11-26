@@ -21,6 +21,7 @@ import platform
 import re
 import subprocess
 import tarfile
+import zlib
 from collections.abc import Callable
 from pathlib import Path
 
@@ -32,6 +33,9 @@ PACKAGE = "latex-formatter"
 BIN_URL = f"https://mirrors.ctan.org/support/{PACKAGE}/bin/{{name}}-{{asset}}.tar.gz"
 INFO_URL = f"https://ctan.org/json/2.0/pkg/{PACKAGE}"
 BINARY = "tex-fmt"
+# The version comes from the network and becomes part of a store directory name:
+# no path separators, and short enough for a file name.
+_VERSION = re.compile(r"[A-Za-z0-9._+-]{1,64}")
 
 #: TeX Live architecture -> asset name in the zip, for machines that are not ambiguous.
 _ASSETS = {
@@ -62,10 +66,21 @@ def _version(client: httpx2.Client) -> str:
     try:
         r = client.get(INFO_URL)
         r.raise_for_status()
-        return str(r.json()["version"]["number"])
-    except (httpx2.HTTPError, ValueError, KeyError, TypeError) as e:
+        version = str(r.json()["version"]["number"])
+    except (
+        httpx2.HTTPError,
+        httpx2.InvalidURL,  # a bad redirect; not an HTTPError
+        ValueError,
+        KeyError,
+        TypeError,
+        RecursionError,  # deeply nested JSON
+    ) as e:
         msg = f"cannot read the {PACKAGE} version from CTAN: {e}"
         raise TexFmtError(msg) from e
+    if not _VERSION.fullmatch(version):
+        msg = f"CTAN gave an unusable {PACKAGE} version: {version[:80]!r}"
+        raise TexFmtError(msg)
+    return version
 
 
 def _stored(entry: Path, asset: str) -> Path | None:
@@ -75,7 +90,7 @@ def _stored(entry: Path, asset: str) -> Path | None:
         binary = entry / BINARY
         if meta["asset"] == asset and _sha256(binary.read_bytes()) == meta["sha256"]:
             return binary
-    except OSError, ValueError, KeyError:
+    except OSError, ValueError, KeyError, TypeError, RecursionError:
         pass
     return None
 
@@ -98,29 +113,41 @@ def _download(client: httpx2.Client, asset: str, entry: Path, version: str) -> P
                 msg = f"no {BINARY} in {BINARY}-{asset}.tar.gz"
                 raise TexFmtError(msg)
             data = fh.read()
-    except (httpx2.HTTPError, tarfile.TarError, OSError) as e:
+    except (
+        httpx2.HTTPError,
+        httpx2.InvalidURL,
+        tarfile.TarError,
+        OSError,
+        EOFError,  # truncated gzip stream
+        zlib.error,  # damaged gzip stream
+        ValueError,
+    ) as e:
         msg = f"cannot download {PACKAGE}: {e}"
         raise TexFmtError(msg) from e
-    entry.mkdir(parents=True, exist_ok=True)
     binary = entry / BINARY
-    tmp = entry / f".{BINARY}.part"
-    tmp.write_bytes(data)
-    tmp.chmod(0o755)
-    tmp.replace(binary)
-    (entry / "texi-ctan.json").write_text(
-        json.dumps(
-            {
-                "package": PACKAGE,
-                "version": version,
-                "asset": asset,
-                "sha256": _sha256(data),
-                "url": url,
-            },
-            indent=2,
+    try:
+        entry.mkdir(parents=True, exist_ok=True)
+        tmp = entry / f".{BINARY}.part"
+        tmp.write_bytes(data)
+        tmp.chmod(0o755)
+        tmp.replace(binary)
+        (entry / "texi-ctan.json").write_text(
+            json.dumps(
+                {
+                    "package": PACKAGE,
+                    "version": version,
+                    "asset": asset,
+                    "sha256": _sha256(data),
+                    "url": url,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
         )
-        + "\n",
-        encoding="utf-8",
-    )
+    except OSError as e:
+        msg = f"cannot store {PACKAGE}: {e}"
+        raise TexFmtError(msg) from e
     return binary
 
 
@@ -142,14 +169,14 @@ def installed_version(env_dir: Path, arch: str | None = None) -> str | None:
     """
     try:
         return str(json.loads(_record(env_dir).read_text(encoding="utf-8"))["version"])
-    except OSError, ValueError, KeyError:
+    except OSError, ValueError, KeyError, TypeError, RecursionError:
         pass
     if arch and (path := installed(env_dir, arch)):
         try:
             out = subprocess.run(
                 [str(path), "--version"], capture_output=True, text=True, timeout=10
             ).stdout
-        except OSError, subprocess.SubprocessError:
+        except OSError, ValueError, subprocess.SubprocessError:  # ValueError: not text
             return None
         if m := re.search(r"\d+(?:\.\d+)+", out):
             return m.group(0)
@@ -235,10 +262,15 @@ def ensure(
         if own:
             cl.close()
     dst = env_dir / "bin" / arch / BINARY
-    archive.clone_file(binary, dst)
-    rec = _record(env_dir)
-    rec.parent.mkdir(parents=True, exist_ok=True)
-    rec.write_text(
-        json.dumps({"package": PACKAGE, "version": version}) + "\n", encoding="utf-8"
-    )
+    try:
+        archive.clone_file(binary, dst)
+        rec = _record(env_dir)
+        rec.parent.mkdir(parents=True, exist_ok=True)
+        rec.write_text(
+            json.dumps({"package": PACKAGE, "version": version}) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as e:
+        say(f"tex-fmt not installed: {e}")
+        return installed(env_dir, arch)
     return dst

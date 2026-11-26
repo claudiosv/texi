@@ -21,11 +21,20 @@ _INCLUDE_RE = re.compile(
 _NAME = re.compile(r"[A-Za-z0-9][\w.+-]*(?:/[\w.+-]+)*")
 #: Loading commands the grammar parses as plain commands.
 _GENERIC = frozenset({
-    r"\LoadClass",
-    r"\LoadClassWithOptions",
-    r"\RequirePackageWithOptions",
+    rb"\LoadClass",
+    rb"\LoadClassWithOptions",
+    rb"\RequirePackageWithOptions",
 })
 _INCLUDES = frozenset({"package_include", "class_include"})
+#: How far past such a command to look for its names.
+_MAX_OPTIONS = 4000
+#: What follows such a command when it has options, which the grammar leaves outside
+#: the command: blanks and comments, ``[...]`` groups, then the ``{names}``.
+_OPTIONS_THEN_NAMES = re.compile(
+    rb"(?:\s|%[^\r\n]*[\r\n])*"
+    rb"(?:\[(?:\\.|%[^\r\n]*[\r\n]|\{[^{}]*\}|[^]\\%{}])*\](?:\s|%[^\r\n]*[\r\n])*)+"
+    rb"\{([^}]*)\}"
+)
 _DOCUMENTCLASS_RE = re.compile(
     r"(?P<declaration>\\documentclass(?![A-Za-z@])"
     r"(?:\s*\[[^\]]*\])?\s*\{[^}]+\})|\\[^\r\n]"
@@ -39,13 +48,18 @@ def _without_comments(text: str) -> str:
     )
 
 
+def _without_nul(src: bytes) -> bytes:
+    """The grammar ends a comment at a NUL byte, TeX does not; offsets stay the same."""
+    return src.replace(b"\0", b" ")
+
+
 def has_documentclass(src: bytes) -> bool:
     r"""Whether a source declares ``\documentclass``; use a comment-aware fallback."""
     parser = _parser()
     if parser is None:
         text = _without_comments(src.decode("utf-8", "ignore"))
         return any(m.group("declaration") for m in _DOCUMENTCLASS_RE.finditer(text))
-    stack = [parser.parse(src).root_node]
+    stack = [parser.parse(_without_nul(src)).root_node]
     while stack:
         node = stack.pop()
         if node.type == "class_include":
@@ -108,6 +122,7 @@ def _by_regex(text: str) -> set[str]:
 
 def _by_tree(parser: Any, src: bytes) -> set[str]:
     found: set[str] = set()
+    src = _without_nul(src)
     stack = [parser.parse(src).root_node]
     while stack:
         node = stack.pop()
@@ -121,11 +136,17 @@ def _by_tree(parser: Any, src: bytes) -> set[str]:
             continue
         if node.type == "generic_command":
             cmd = node.child_by_field_name("command")
-            if cmd is not None and cmd.text.decode() in _GENERIC:
+            # compare bytes: a command name need not be UTF-8
+            if cmd is not None and cmd.text in _GENERIC:
                 for arg in node.children_by_field_name("arg"):
                     if arg.type == "curly_group":
                         found |= _names(arg.text.decode("utf-8", "ignore")[1:-1])
                         break
+                else:
+                    # bounded, so many unclosed ``[`` do not cost quadratic time
+                    end = cmd.end_byte + _MAX_OPTIONS
+                    if m := _OPTIONS_THEN_NAMES.match(src, cmd.end_byte, end):
+                        found |= _names(m[1].decode("utf-8", "ignore"))
         stack.extend(node.children)
     return found
 
@@ -148,7 +169,7 @@ def unclosed_braces(text: str) -> list[int] | None:
     parser = _parser()
     if parser is None:
         return None
-    src = text.encode("utf-8", "surrogatepass")
+    src = _without_nul(text.encode("utf-8", "surrogatepass"))
     offsets: set[int] = set()
     stack = [parser.parse(src).root_node]
     while stack:

@@ -15,7 +15,7 @@ from texi import texscan
 
 #: Error messages that come with a "Runaway ..." line, and the macro they name.
 _MACRO = re.compile(
-    r"(?:scanning use of|Paragraph ended before) \\*(?:\\)?\s*(\\*)([A-Za-z@]+)"
+    r"(?:scanning use of|Paragraph ended before) \\*(?:\s+\\*)?([A-Za-z@]+)"
 )
 _BLANK = re.compile(r"\n[ \t]*\n")
 
@@ -50,7 +50,7 @@ class Located:
 def macro_of(message: str) -> str | None:
     """The macro named in the error message, without backslashes."""
     m = _MACRO.search(message)
-    return m.group(2) if m else None
+    return m.group(1) if m else None
 
 
 def runaway_text(stack: list[str]) -> str | None:

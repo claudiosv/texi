@@ -144,7 +144,10 @@ def clone_env(
         "TEXMFCONFIG": str(root / "texmf-config"),
         "TEXMFSYSCONFIG": str(root / "texmf-config"),
         "TEXMFCNF": str(root / "texmf-dist" / "web2c"),
-        "PATH": f"{root / 'bin' / arch}{os.pathsep}{base.get('PATH', '')}",
+        # no empty entry when there is no base PATH: it would mean the current directory
+        "PATH": os.pathsep.join(
+            p for p in (str(root / "bin" / arch), base.get("PATH")) if p
+        ),
     }
     return env
 

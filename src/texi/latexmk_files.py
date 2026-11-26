@@ -260,7 +260,9 @@ def parse_fls(text: str) -> Fls:
     fls = Fls()
     seen_in: set[str] = set()
     seen_out: set[str] = set()
-    for line in text.splitlines():
+    # only "\n" ends a line: a path may hold the other splitlines() characters
+    for line in text.split("\n"):
+        line = line.removesuffix("\r")
         keyword, _, rest = line.partition(" ")
         if not rest:
             continue
@@ -579,14 +581,14 @@ def parse_fdb(text: str) -> Fdb:
     fdb = Fdb()
     current: Rule | None = None
     section = "deps"
-    for raw in text.splitlines():
+    for raw in text.split("\n"):  # not splitlines(): see parse_fls
         line = raw.strip()
         if not line:
             continue
         if line.startswith("#"):
             m = _VERSION.match(line)
             if m and fdb.version is None:
-                fdb.version = int(m.group(1))
+                fdb.version = _int(m.group(1))  # None if too long for int()
             continue
         head = _RULE_HEAD.match(line) if line.startswith("[") else None
         if head:
@@ -675,16 +677,23 @@ class ProjectFiles:
 
     def _root(self, root: str | Path | None) -> str:
         if root is not None:
-            return _normalize(os.fspath(root), self.pwd)
+            r = _normalize(os.fspath(root), self.pwd)
+            # without a PWD the root is also the base of relative paths, so it
+            # must be absolute itself
+            return r if self.pwd else os.path.abspath(r)
         return self.pwd or os.fspath(self.aux_dir.resolve())
 
-    def _all_inputs(self) -> list[str]:
-        """Resolved inputs from both files, first-seen order, fls first."""
+    def _all_inputs(self, root: str | None = None) -> list[str]:
+        """Resolved inputs from both files, first-seen order, fls first.
+
+        Relative paths are taken against the ``.fls`` ``PWD``, or against ``root``
+        when there is none.
+        """
         out: dict[str, None] = {}
-        pwd = self.pwd
+        pwd = self.pwd or root
         if self.fls:
-            for p in self.fls.resolved_inputs():
-                out.setdefault(p)
+            for p in self.fls.inputs:
+                out.setdefault(_normalize(p, pwd))
         if self.fdb:
             for r in self.fdb.rules:
                 for d in r.inputs:
@@ -696,11 +705,11 @@ class ProjectFiles:
         """Return resolved inputs from both files, first-seen order, fls first."""
         return [Path(p) for p in self._all_inputs()]
 
-    def _generated(self) -> set[str]:
+    def _generated(self, root: str | None = None) -> set[str]:
         gen: set[str] = set()
-        pwd = self.pwd
+        pwd = self.pwd or root
         if self.fls:
-            gen.update(self.fls.resolved_outputs())
+            gen.update(_normalize(p, pwd) for p in self.fls.outputs)
         if self.fdb:
             for r in self.fdb.rules:
                 gen.update(_normalize(d.path, pwd) for d in r.generated)
@@ -717,12 +726,13 @@ class ProjectFiles:
         ----------
         root : str or Path, optional
             Project directory; defaults to the ``.fls`` ``PWD`` or ``aux_dir``.
+            Without a ``PWD``, relative paths are taken to be relative to it.
         """
         r = self._root(root)
-        gen = self._generated()
+        gen = self._generated(r)
         return [
             Path(p)
-            for p in self._all_inputs()
+            for p in self._all_inputs(r)
             if _is_within(p, r) and p not in gen and not is_texmf_path(p)
         ]
 
@@ -735,10 +745,10 @@ class ProjectFiles:
             Project directory; same default as :meth:`source_files`.
         """
         r = self._root(root)
-        gen = self._generated()
+        gen = self._generated(r)
         return [
             Path(p)
-            for p in self._all_inputs()
+            for p in self._all_inputs(r)
             if p not in gen and (not _is_within(p, r) or is_texmf_path(p))
         ]
 

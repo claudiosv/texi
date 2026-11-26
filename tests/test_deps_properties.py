@@ -1,6 +1,7 @@
 """Property tests of the dependency graph and the unused-dependency report."""
 
 from itertools import pairwise
+from pathlib import Path
 
 import pytest
 from hypothesis import given
@@ -94,42 +95,28 @@ def test_build_follows_edges_within_depth(
         assert shown == fixpoint(keep, set(roots) & set(g.revisions))
 
 
-@st.composite
-def layered_graphs(draw: st.DrawFn) -> deptree.Graph:
-    """Edges only go one layer down, so every path to a package is equally long.
-
-    On other graphs a depth limit can lose packages: see the xfail test.
-    """
-    layers = draw(st.lists(st.integers(1, 3), min_size=1, max_size=4))
-    below: list[str] = []
-    deps: dict[str, list[str]] = {}
-    for level in reversed(range(len(layers))):
-        here = [f"p{level}{i}" for i in range(layers[level])]
-        for name in here:
-            deps[name] = (
-                draw(st.lists(st.sampled_from(below), unique=True)) if below else []
-            )
-        below = here
-    return graph(deps)
-
-
-@given(g=layered_graphs(), depth=st.integers(0, 4))
-def test_build_depth_shows_every_package_that_near(
-    g: deptree.Graph, depth: int
-) -> None:
-    roots = sorted(n for n in g.revisions if n.startswith("p0"))
-    near = set(roots)
-    for _ in range(depth):
-        near |= {d for n in near for d in g.deps[n]}
-    shown = {node.name for node, _ in walk(deptree.build(g, roots, depth=depth))}
-    assert shown == near
-
-
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="build(depth=) marks a node first cut at the limit as seen, losing its deps",
+@given(
+    g=graphs(),
+    roots=some_names,
+    depth=st.integers(0, 5),
+    invert=st.booleans(),
+    only=st.one_of(st.none(), st.sets(st.sampled_from(NAMES))),
 )
+def test_build_depth_shows_every_package_that_near(
+    g: deptree.Graph,
+    roots: list[str],
+    depth: int,
+    invert: bool,
+    only: set[str] | None,
+) -> None:
+    edges = g.dependents if invert else g.deps
+    near = set(roots) & set(g.revisions)
+    for _ in range(depth):
+        near |= {d for n in near for d in edges.get(n, []) if only is None or d in only}
+    tree = deptree.build(g, roots, depth=depth, invert=invert, only=only)
+    assert {node.name for node, _ in walk(tree)} == near
+
+
 def test_build_depth_keeps_a_package_reachable_by_a_shorter_path() -> None:
     g = graph({"a": ["b", "c"], "b": ["c"], "c": ["d"], "d": []})
     tree = deptree.build(g, ["a"], depth=2)
@@ -196,16 +183,23 @@ def test_analyze_partitions_the_dependencies(
         )
     for name in rep.unused:
         needed = any(name in deptree.closure(g, [u]) for u in live - {name})
-        # A collection that a used package needs is the xfail case below.
-        assert not needed or categories.get(name) in {"Collection", "Scheme"}
+        assert not needed
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="analyze reports a collection unused although a used package needs it",
-)
 def test_a_collection_needed_by_a_used_package_is_not_unused() -> None:
     g = graph({"a": ["collection-c"], "collection-c": []})
     rep = unused.analyze(g, ["collection-c"], {"a"}, {"collection-c": "Collection"})
     assert "collection-c" not in rep.unused
+
+
+def test_a_line_separator_in_longdesc_does_not_rename_a_package(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "tlpkg").mkdir()
+    (tmp_path / "tlpkg" / "texlive.tlpdb").write_text(
+        f"name good\nrevision 1\nlongdesc x{chr(0x2028)}name evil\n"
+        "runfiles size=1\n texmf-dist/tex/good.sty\n",
+        encoding="utf-8",
+    )
+    assert set(deptree.read(tmp_path).revisions) == {"good"}
+    assert unused.file_owners(tmp_path) == {"texmf-dist/tex/good.sty": "good"}

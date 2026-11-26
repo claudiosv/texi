@@ -28,7 +28,8 @@ def tree() -> Generator[Path]:
 
 # --- execute lines ------------------------------------------------------------
 
-# "/" is left out of format names and engines: see the xfail test further down
+# "/" is not allowed in format names and engines (parse_add_format rejects it): see
+# the test further down
 idents = st.from_regex(r"[a-z][a-z0-9.-]{0,8}", fullmatch=True)
 # one line, like the tlpdb line it comes from
 free = st.text(st.characters(codec="utf-8", exclude_characters="\n"), max_size=15)
@@ -151,12 +152,11 @@ def test_parse_add_hyphen_and_database_filter(
         assert ta.hyphen_defs(executes, database) == found
 
 
-# a bare "AddFormat"/"AddHyphen" is left out: see the xfail tests below
-execute_lines = st.builds(
-    lambda kind, rest: f"{kind} {rest}",
-    st.sampled_from(["AddFormat", "AddHyphen", "addMap", "other", ""]),
-    junk,
-).filter(lambda e: e.split() not in (["AddFormat"], ["AddHyphen"]))
+# a bare "AddFormat"/"AddHyphen" is included: see also the tests below
+kinds = st.sampled_from(["AddFormat", "AddHyphen", "addMap", "other", ""])
+execute_lines = st.one_of(
+    kinds, st.builds(lambda kind, rest: f"{kind} {rest}", kinds, junk)
+)
 executes_maps = st.dictionaries(idents, st.lists(execute_lines, max_size=4), max_size=3)
 
 
@@ -170,24 +170,33 @@ def test_defs_raise_only_execute_error(
         ta.hyphen_defs(executes, database)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=IndexError,
-    reason="format_defs indexes the missing arguments of a bare AddFormat",
-)
 def test_format_defs_bare_add_format() -> None:
     with pytest.raises(ta.ExecuteError):
         ta.format_defs({"p": ["AddFormat"]})
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=IndexError,
-    reason="hyphen_defs indexes the missing arguments of a bare AddHyphen",
-)
 def test_hyphen_defs_bare_add_hyphen() -> None:
     with pytest.raises(ta.ExecuteError):
         ta.hyphen_defs({"p": ["AddHyphen"]}, "dat")
+
+
+# --- reading the tlpdb --------------------------------------------------------
+
+# characters that str.splitlines() splits at but a tlpdb does not
+line_breaks = st.sampled_from("\x0b\x0c\x1c\x1d\x1e\x85" + chr(0x2028) + chr(0x2029))
+
+
+@FEW
+@given(sep=line_breaks)
+@example(chr(0x2028))
+def test_a_longdesc_cannot_add_execute_lines_or_options(sep: str) -> None:
+    forged = ["name evil", "execute addMap evil.map", "depend opt_create_formats:0"]
+    text = "name good\nlongdesc x" + sep + sep.join(forged) + "\n\n"
+    with tree() as root:
+        db = root / "texlive.tlpdb"
+        db.write_text(text, encoding="utf-8")
+        assert ta.read_executes(db) == {}
+        assert ta.read_installation_option(db, "create_formats") is None
 
 
 # --- pending actions ----------------------------------------------------------
@@ -255,6 +264,7 @@ contents = st.one_of(
 @given(content=contents)
 @example(b"\xff")
 @example(b"[]")
+@example(b"[" * 200_000)
 def test_pending_read_raises_only_execute_error(content: bytes) -> None:
     with tree() as root:
         path = root / ta.PENDING_FILE
@@ -267,17 +277,37 @@ def test_pending_read_raises_only_execute_error(content: bytes) -> None:
         assert isinstance(result, ta._Pending)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ta.ExecuteError,
-    reason="a format name with '/' is accepted and saved, then read rejects the file",
-)
 def test_pending_format_name_with_slash() -> None:
-    f = ta.parse_add_format("name=a/b engine=tex")
+    for line in ("name=a/b engine=tex", "name=a engine=t/x"):
+        with pytest.raises(ta.ExecuteError):
+            ta.parse_add_format(line)
+
+
+format_words = st.text(st.sampled_from("ab/. -"), min_size=1, max_size=5)
+
+
+@FEW
+@given(name=format_words, engine=format_words)
+@example("a/b", "tex")
+def test_an_accepted_format_survives_the_pending_file(name: str, engine: str) -> None:
+    try:
+        f = ta.parse_add_format(words(name=name, engine=engine))
+    except ta.ExecuteError:
+        assert "/" in name + engine
+        return
     pending = ta._Pending(formats={f"{f.name}/{f.engine}"})
     with tree() as root:
         pending.save(root)
         assert ta._Pending.read(root) == pending
+
+
+@given(executes=executes_maps)
+@example({"p": ["AddFormat", "AddHyphen"]})
+def test_batch_note_never_raises(executes: dict[str, list[str]]) -> None:
+    batch = ta.Batch()
+    for name, lines in executes.items():
+        batch.note(name, "install", lines, [])
+    assert all("/" not in f.name + f.engine for f in batch.new_formats.values())
 
 
 # --- config files -------------------------------------------------------------

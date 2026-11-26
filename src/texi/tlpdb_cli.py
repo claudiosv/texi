@@ -144,7 +144,7 @@ def _age(dt: datetime | None) -> str:
 def _kv(rows: list[tuple[str, str]]) -> None:
     width = max(len(k) for k, _ in rows)
     for k, v in rows:
-        console.print(f"[bold]{k:<{width}}[/bold]  {escape(v)}")
+        console.print(f"[bold]{escape(f'{k:<{width}}')}[/bold]  {escape(v)}")
 
 
 def _print_stats(db: tl.Tlpdb) -> None:
@@ -184,7 +184,7 @@ def _print_stats(db: tl.Tlpdb) -> None:
     table.add_column("category")
     table.add_column("entries", justify="right")
     for cat, n in st.categories.items():
-        table.add_row(cat or "(none)", f"{n:,}")
+        table.add_row(escape(cat or "(none)"), f"{n:,}")
     console.print(table)
     ftable = Table(title="Files listed", title_justify="left")
     ftable.add_column("section")
@@ -294,7 +294,7 @@ def search(
             desc.append_text(_highlight(f, pats, "cyan"))
         if len(h.files) > 3:
             desc.append(f"\n... {len(h.files) - 3} more files", "dim")
-        table.add_row(name, p.category, p.revision, desc)
+        table.add_row(name, escape(p.category), escape(p.revision), desc)
     console.print(table)
     if len(shown) < len(hits):
         console.print(
@@ -424,7 +424,7 @@ def _print_info(
         return
     for sec, files in p.files.items():
         size = p.sizes.get(sec)
-        head = f"[bold]{sec}[/bold]: {len(files):,} file(s)"
+        head = f"[bold]{escape(sec)}[/bold]: {len(files):,} file(s)"
         if size is not None:
             head += f", size={size:,}"
         console.print(head)
@@ -445,10 +445,10 @@ def _print_info(
 
 
 def _fmt_size(value: str | None) -> str:
-    if value and value.isdigit():
+    if (size := tl.parse_int(value)) is not None:
         from rich.filesize import decimal
 
-        return f"{decimal(int(value))} ({int(value):,} bytes)"
+        return f"{decimal(size)} ({size:,} bytes)"
     return value or "-"
 
 

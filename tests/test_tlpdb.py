@@ -834,7 +834,7 @@ def test_old_schema_index_is_rebuilt_offline(
         _prime(m)
     _no_network(monkeypatch)
     db = tl.load(REPO)
-    assert db.schema_version == tl.SCHEMA_VERSION == 2
+    assert db.schema_version == tl.SCHEMA_VERSION == 3
     assert db.from_cache
     assert not db.offline
     assert db.packages["00texlive.config"].settings

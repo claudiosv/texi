@@ -2,16 +2,16 @@
 # ruff: file-ignore[implicit-namespace-package]
 
 import dataclasses
-import itertools
 import time
 from collections import Counter
 from collections.abc import Callable
 
 import pytest
-from hypothesis import assume, example, given, settings
+from hypothesis import example, given, settings
 from hypothesis import strategies as st
 
 from texi import logparse as lp
+from texi.logparse_bib import biber_temp_sources
 from texi.logparse_tex import _FileStack, _unwrap
 from texi.logparse_texfmt import parse_texfmt
 
@@ -119,35 +119,38 @@ TEXFMT_LINES = [
 ALL_LINES = TEX_LINES + BIB_LINES + INDEX_LINES + LATEXMK_LINES + TEXFMT_LINES
 
 
+SURROGATES = [chr(c) for c in (0xD800, 0xDC80, 0xDCFF)]
+STRESS = [
+    " on input line " + "1" * 5000,
+    " on page " + "2" * 5000,
+    "l." + "3" * 5000 + " x",
+    " at lines " + "4" * 5000,
+    " " * 3000 + "b",
+    "x)" * 1000,
+    "(./a.tex " + ")" * 1000,
+]
+
+
 def logs(lines: list[str]) -> st.SearchStrategy[str]:
-    # st.text() never produces lone surrogates (see the xfail below), and these
-    # sizes are far below the quadratic and 4300-digit cases (also below).
+    # st.text() never produces lone surrogates, so they are added by hand; the
+    # stress fragments hold numbers over the 4300-digit int() limit and long runs of
+    # whitespace and parentheses.
     fragment = st.sampled_from(lines)
+    odd = st.text(st.one_of(st.characters(), st.sampled_from(SURROGATES)), max_size=100)
     line = st.one_of(
         fragment,
         fragment,
-        st.builds(str.__add__, fragment, st.text(max_size=20)),
+        st.builds(str.__add__, fragment, odd),
+        st.builds(str.__add__, fragment, st.sampled_from(STRESS)),
+        st.sampled_from(STRESS),
         st.text(max_size=100),
+        odd,
     )
     return st.lists(line, max_size=25).map("\n".join)
 
 
 tex_logs = logs(TEX_LINES)
 any_logs = logs(ALL_LINES)
-
-
-def _interrupted(diags: list[lp.Diagnostic]) -> bool:
-    # an info message separates an error from the stop that would give it a line
-    index = [i for i, d in enumerate(diags) if d.kind != "info"]
-    return any(
-        b - a > 1
-        and diags[b].code == "emergency-stop"
-        and diags[b].line
-        and diags[a].kind == "error"
-        and diags[a].line is None
-        and diags[a].file == diags[b].file
-        for a, b in itertools.pairwise(index)
-    )
 
 
 @settings(deadline=None)
@@ -177,8 +180,6 @@ def test_parse_tex_ignores_crlf(text: str, info: bool) -> None:
 def test_include_info_only_adds_info(text: str) -> None:
     plain = lp.parse_tex(text)
     full = lp.parse_tex(text, include_info=True)
-    # excluded: the bug in test_include_info_keeps_error_lines
-    assume(not _interrupted(full.diagnostics))
     assert [d for d in full.diagnostics if d.kind != "info"] == plain.diagnostics
     assert full.info == plain.info
 
@@ -327,30 +328,15 @@ def test_missing_package(name: str, ext: str) -> None:
     assert lp.missing_package(diag) == (name if ext in {".sty", ".cls"} else None)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValueError,
-    reason="_warning_common calls int() on unbounded digits from a continuation line",
-)
 @pytest.mark.parametrize("where", ["on page", "on input line"])
 def test_huge_number_in_a_warning(where: str) -> None:
     lp.parse_tex(f"LaTeX Warning: x\n {where} {'1' * 5000}\n")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=UnicodeEncodeError,
-    reason="_detect_wrap encodes non-ASCII lines strictly; parse_tex says never raises",
-)
 def test_lone_surrogate_in_a_log() -> None:
     lp.parse_tex("first line\n" + chr(0xDC80))
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="_propagate_lines only looks at adjacent diagnostics, info ones included",
-)
 def test_include_info_keeps_error_lines() -> None:
     text = "! Boom.\n\nLaTeX Info: hi.\n\n! Emergency stop.\nl.5 x\n"
     full = lp.parse_tex(text, include_info=True).diagnostics
@@ -363,11 +349,6 @@ def _cpu_seconds(f: Callable[[], object]) -> float:
     return time.process_time() - start
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="_ON_LINE starts with \\s*, so search and sub are quadratic in whitespace",
-)
 def test_long_whitespace_in_a_warning_is_fast() -> None:
     # linear: about a millisecond; now: several tenths of a second
     budget = 0.05
@@ -375,11 +356,6 @@ def test_long_whitespace_in_a_warning_is_fast() -> None:
     assert _cpu_seconds(lambda: lp.parse_tex(text)) < budget
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="_FileStack.feed copies the rest of the line for every ')'",
-)
 def test_many_parens_on_one_long_line_are_fast() -> None:
     # "a 1 MB single line is fine": compare with the same line with no file open,
     # which skips the copy
@@ -387,3 +363,9 @@ def test_many_parens_on_one_long_line_are_fast() -> None:
     base = _cpu_seconds(lambda: _FileStack().feed(parens))
     slow = _cpu_seconds(lambda: _FileStack().feed("(./a.tex " + parens))
     assert slow < 10 * base + 0.05
+
+
+def test_biber_temp_sources_with_a_lone_surrogate() -> None:
+    name = f"a{chr(0xDC80)}.bib"
+    bcf = f"<bcf:datasource> {name} </bcf:datasource>"
+    assert list(biber_temp_sources(bcf).values()) == [name]

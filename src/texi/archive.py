@@ -33,6 +33,7 @@ import errno
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import tarfile
@@ -62,9 +63,23 @@ SystemInstalled = Callable[[list[str]], set[str]]
 #: Fields tlmgr does not keep in the tlpobj of an installed (relocated) package.
 _DROPPED_FIELDS = ("relocated",)
 
+# Name, revision and checksum come from the package index and end up in file
+# system paths and URLs, so only plain values are accepted.
+_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,199}")
+_REVISION_RE = re.compile(r"[0-9]{1,18}")
+_CHECKSUM_RE = re.compile(r"[0-9A-Fa-f]{1,128}")
+
 
 class ArchiveError(Exception):
     """A package could not be fetched, verified or installed from the store."""
+
+
+def _check_field(what: str, value: str, pattern: re.Pattern[str]) -> str:
+    """``value`` if it matches ``pattern``, else raise ArchiveError."""
+    if not pattern.fullmatch(value):
+        msg = f"unsafe package {what}: {value!r}"
+        raise ArchiveError(msg)
+    return value
 
 
 # --- store -----------------------------------------------------------------
@@ -94,7 +109,15 @@ def archive_id(name: str, revision: str, checksum: str) -> str:
     -------
     str
         For example ``kastrup-15878-d7cbd22``: the first 7 characters of the checksum.
+
+    Raises
+    ------
+    ArchiveError
+        A value is not a plain package name, revision number or hex checksum.
     """
+    _check_field("name", name, _NAME_RE)
+    _check_field("revision", revision, _REVISION_RE)
+    _check_field("checksum", checksum, _CHECKSUM_RE)
     return f"{name}-{revision}-{checksum[:7]}"
 
 
@@ -299,7 +322,7 @@ def fetch(
     part = Path(tempfile.mkstemp(prefix=".dl-", suffix=".partial", dir=store)[1])
     staging = Path(tempfile.mkdtemp(prefix=".tmp-", dir=store))
     try:
-        size = int(pkg.first("containersize") or 0)
+        size = tlpdb.parse_int(pkg.first("containersize")) or 0
 
         def url_for(attempt: int) -> str:
             base = mirror if mirror and attempt == 0 else repository
@@ -465,16 +488,32 @@ def target_path(path: str, standalone: bool) -> str:
 
 
 def _checked(env_dir: Path, rel: str) -> Path:
-    """``env_dir / rel`` if it stays inside ``env_dir``."""
+    """``env_dir / rel`` if it stays inside ``env_dir``.
+
+    The directory holding it must be inside ``env_dir`` after symlinks are
+    followed. The last component may be a symlink: it is replaced or removed
+    itself, never followed. Names with a NUL or a line break are refused, as a
+    tlpobj cannot record them.
+    """
     p = Path(rel)
-    if p.is_absolute() or ".." in p.parts or not rel:
+    if (
+        p.is_absolute()
+        or ".." in p.parts
+        or not p.parts  # "" and "." name env_dir itself
+        or "\0" in rel
+        or rel.splitlines() != [rel]
+    ):
         msg = f"unsafe path in package: {rel!r}"
         raise ArchiveError(msg)
-    return env_dir / p
+    path = env_dir / p
+    if not path.parent.resolve().is_relative_to(env_dir.resolve()):
+        msg = f"unsafe path in package: {rel!r} leads outside through a symlink"
+        raise ArchiveError(msg)
+    return path
 
 
 def _attr(value: str) -> str:
-    return f'"{value}"' if any(c.isspace() for c in value) else value
+    return f'"{value}"' if not value or any(c.isspace() for c in value) else value
 
 
 def render_stanza(
@@ -492,7 +531,13 @@ def render_stanza(
     ]
     if pkg.shortdesc:
         out.append(f"shortdesc {pkg.shortdesc}")
-    out += [f"longdesc {line}" for line in textwrap.wrap(pkg.longdesc, 70)]
+    # Words are never split: the parser joins the lines with a space.
+    out += [
+        f"longdesc {line}"
+        for line in textwrap.wrap(
+            pkg.longdesc, 70, break_long_words=False, break_on_hyphens=False
+        )
+    ]
     out += [f"depend {d}" for d in pkg.depends]
     tail: list[str] = []
     for key, values in pkg.fields.items():
@@ -519,7 +564,9 @@ def render_stanza(
     if pkg.catalogue_key:
         out.append(f"catalogue {pkg.catalogue_key}")
     out += tail
-    return "\n".join(out) + "\n"
+    # A value with a U+2028 or the like must not look like another line to a
+    # reader of the tlpobj that splits on every kind of line break.
+    return "\n".join(" ".join(line.splitlines()) for line in out) + "\n"
 
 
 def skip_reason(pkg: tlpdb.TlPackage, *, standalone: bool) -> str | None:
@@ -569,14 +616,25 @@ def _stanzas(text: str) -> list[tuple[str, str]]:
     return out
 
 
+def _tlpobj_path(env_dir: Path, name: str) -> Path:
+    """``tlpkg/tlpobj/<name>.tlpobj``; ArchiveError if ``name`` is unsafe."""
+    _check_field("name", name, _NAME_RE)
+    return env_dir / "tlpkg" / "tlpobj" / f"{name}.tlpobj"
+
+
+def _read_records(path: Path) -> str:
+    """Text of a tlpdb or tlpobj in which only ``\\n`` and ``\\r\\n`` end a line."""
+    return path.read_text(encoding="utf-8", newline="\n").replace("\r\n", "\n")
+
+
 def installed_revision(env_dir: Path, name: str) -> int | None:
     """Revision of ``name`` per its tlpobj in ``env_dir``, or None if not installed."""
-    obj = env_dir / "tlpkg" / "tlpobj" / f"{name}.tlpobj"
     try:
-        for line in obj.read_text(encoding="utf-8").splitlines():
+        obj = _tlpobj_path(env_dir, name)
+        for line in _read_records(obj).split("\n"):
             if line.startswith("revision "):
                 return int(line[9:])
-    except OSError, ValueError:
+    except ArchiveError, OSError, ValueError:
         pass
     return None
 
@@ -611,9 +669,11 @@ class Tree:
         Raises
         ------
         ArchiveError
-            A file the tlpdb lists is not in the container, or has an unsafe path.
+            A file the tlpdb lists is not in the container, or has an unsafe path,
+            or the package name is unsafe.
         """
-        pairs: list[tuple[Path, Path]] = []
+        obj = _tlpobj_path(self.env_dir, pkg.name)
+        pairs: list[tuple[Path, str]] = []
         listed = [
             (f.path, target_path(f.path, self.standalone))
             for f in pkg.files.get("runfiles", [])
@@ -628,14 +688,24 @@ class Tree:
                     listed += [(f.path, f.path) for f in files]
         for member, rel in listed:
             src = _checked(entry.package_dir, member_path(member))
-            dst = _checked(self.env_dir, rel)
+            _checked(self.env_dir, rel)
             if not (src.is_symlink() or src.exists()):
                 msg = f"{member} is missing from the {pkg.name} archive"
                 raise ArchiveError(msg)
-            pairs.append((src, dst))
+            pairs.append((src, rel))
         self.uninstall(pkg.name)
-        for src, dst in pairs:
-            clone_file(src, dst, relink=self._relink)
+        placed: list[Path] = []
+        try:
+            for src, rel in pairs:
+                # Checked again: a file placed just now may be a symlink.
+                dst = _checked(self.env_dir, rel)
+                clone_file(src, dst, relink=self._relink)
+                placed.append(dst)
+        except ArchiveError:
+            for dst in reversed(placed):
+                dst.unlink(missing_ok=True)
+                self._prune(dst.parent)
+            raise
         self.batch.note(
             pkg.name,
             "install",
@@ -643,7 +713,6 @@ class Tree:
             pkg.fields.get("postaction", []),
         )
         stanza = render_stanza(pkg, self.standalone, self.arch)
-        obj = self.env_dir / "tlpkg" / "tlpobj" / f"{pkg.name}.tlpobj"
         _write_atomic(obj, stanza)
         self._add[pkg.name] = stanza
         self._drop.discard(pkg.name)
@@ -656,9 +725,9 @@ class Tree:
         Its members are installed separately; the record lets ``tlmgr`` and
         :func:`managed` see the collection as installed.
         """
+        obj = _tlpobj_path(self.env_dir, pkg.name)
         self.uninstall(pkg.name)
         stanza = render_stanza(pkg, self.standalone, self.arch)
-        obj = self.env_dir / "tlpkg" / "tlpobj" / f"{pkg.name}.tlpobj"
         _write_atomic(obj, stanza)
         self._add[pkg.name] = stanza
         self._drop.discard(pkg.name)
@@ -682,15 +751,20 @@ class Tree:
         -------
         list[Path]
             The files that were removed.
+
+        Raises
+        ------
+        ArchiveError
+            ``name`` is not a safe package name.
         """
-        obj = self.env_dir / "tlpkg" / "tlpobj" / f"{name}.tlpobj"
+        obj = _tlpobj_path(self.env_dir, name)
         removed: list[Path] = []
         recorded: list[str] = []
         executes: list[str] = []
         postactions: list[str] = []
         if obj.exists():
             in_files = False
-            for line in obj.read_text(encoding="utf-8").splitlines():
+            for line in _read_records(obj).split("\n"):
                 if line[:1] in " \t":
                     if in_files and line.strip():
                         recorded.append(_split_file_line(line))
@@ -733,7 +807,7 @@ class Tree:
         """Write the tlpdb and manifest changes."""
         db = self.env_dir / "tlpkg" / "texlive.tlpdb"
         if self._add or self._drop:
-            old = db.read_text(encoding="utf-8") if db.exists() else ""
+            old = _read_records(db) if db.exists() else ""
             gone = self._drop | set(self._add)
             keep = [t for n, t in _stanzas(old) if n not in gone]
             keep += self._add.values()
@@ -1055,7 +1129,12 @@ def install_packages(
         if progress:
             progress(f"Installing {name}", i - 1, 0)  # 0: no "done" if it fails
         if name in res.meta:
-            tree.record(pkg)
+            try:
+                tree.record(pkg)
+            except (ArchiveError, OSError) as e:
+                result.failed.append(name)
+                warn(f"{name}: install failed: {e}")
+                continue
             result.recorded.append(name)
             if name in updates:
                 result.updated.append(name)

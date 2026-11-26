@@ -2,6 +2,7 @@
 # ruff: file-ignore[implicit-namespace-package]
 
 import re
+import time
 
 import pytest
 from hypothesis import assume, given, settings
@@ -40,14 +41,20 @@ FRAGMENTS = [
     "\\iffalse",
     "\\fi",
     "\\verb|",
+    "\0",
+    "\\LoadClassWithOptions",
+    "\\RequirePackageWithOptions",
 ]
 tex = st.lists(
     st.one_of(st.sampled_from(FRAGMENTS), st.text(max_size=3)), max_size=30
 ).map("".join)
+# a Latin-1 byte right after a backslash, in a source that is then not UTF-8
+latin1 = st.integers(0x80, 0xFF).map(lambda b: b"\\" + bytes([b]))
 sources_bytes = st.one_of(
     st.binary(max_size=80),
     st.lists(
-        st.one_of(tex.map(str.encode), st.binary(min_size=1, max_size=2)), max_size=6
+        st.one_of(tex.map(str.encode), st.binary(min_size=1, max_size=2), latin1),
+        max_size=6,
     ).map(b"".join),
 )
 names = st.from_regex(r"[a-z][a-z0-9-]{0,8}", fullmatch=True)
@@ -59,15 +66,6 @@ def _use(backend: str, mp: pytest.MonkeyPatch) -> None:
         mp.setattr(texscan, "_parser", lambda: None)
 
 
-def _bad_command_byte(src: bytes) -> bool:
-    # a high byte right after a backslash in a source that is not UTF-8
-    try:
-        src.decode()
-    except UnicodeDecodeError:
-        return re.search(rb"\\[\x80-\xff]", src) is not None
-    return False
-
-
 @pytest.mark.parametrize("backend", BACKENDS)
 @settings(deadline=None)
 @given(src=sources_bytes)
@@ -75,8 +73,6 @@ def test_scanning_bytes_never_raises(backend: str, src: bytes) -> None:
     with pytest.MonkeyPatch.context() as mp:
         _use(backend, mp)
         assert isinstance(texscan.has_documentclass(src), bool)
-        # excluded: the bug in test_latin1_byte_after_a_backslash
-        assume(backend == "regex" or not _bad_command_byte(src))
         for name in texscan.loaded_names(src):
             assert re.fullmatch(r"[A-Za-z0-9][\w.+/-]*", name)
 
@@ -87,7 +83,15 @@ def test_scanning_bytes_never_raises(backend: str, src: bytes) -> None:
     loads=st.lists(
         st.tuples(
             st.sampled_from(["usepackage", "RequirePackage", "LoadClass"]),
-            st.sampled_from(["", "[x]", "[a=1,b]"]),
+            st.sampled_from([
+                "",
+                "[x]",
+                "[a=1,b]",
+                " [12pt] ",
+                "[opt={a,b}]",
+                "% c\n[x]% d ] {no}\n",
+                "[a,% ]\n b]",
+            ]),
             st.lists(names, min_size=1, max_size=3),
         ),
         max_size=5,
@@ -97,8 +101,8 @@ def test_loaded_names_finds_every_load(
     backend: str, loads: list[tuple[str, str, list[str]]]
 ) -> None:
     src = "".join(f"\\{cmd}{opt}{{{', '.join(n)}}}\n" for cmd, opt, n in loads)
-    # excluded for the grammar: the bug in test_load_class_with_options
-    assume(backend == "regex" or not any(c == "LoadClass" and o for c, o, _ in loads))
+    # the regex fallback knows no comments around or inside the options
+    assume(backend == "tree" or not any("%" in o for _, o, _ in loads))
     with pytest.MonkeyPatch.context() as mp:
         _use(backend, mp)
         assert texscan.loaded_names(src.encode()) == {
@@ -106,11 +110,13 @@ def test_loaded_names_finds_every_load(
         }
 
 
-# NUL excluded: the bug in test_nul_in_a_comment
-one_line = st.text(
-    st.characters(exclude_characters="\0\r\n", exclude_categories=["Cs"]),
+one_line = st.lists(
+    st.one_of(
+        st.just("\0"),
+        st.characters(exclude_characters="\r\n", exclude_categories=["Cs"]),
+    ),
     max_size=30,
-)
+).map("".join)
 
 
 @needs_grammar
@@ -178,11 +184,14 @@ def test_unclosed_braces_without_a_grammar() -> None:
         "Paragraph ended before",
     ]),
     slashes=st.integers(0, 3),
+    gap=st.sampled_from(["", " ", "  "]),
     name=macros,
     tail=st.sampled_from(["", ".", " was complete."]),
 )
-def test_macro_of_round_trip(lead: str, slashes: int, name: str, tail: str) -> None:
-    assert runaway.macro_of(f"{lead} {'\\' * slashes}{name}{tail}") == name
+def test_macro_of_round_trip(
+    lead: str, slashes: int, gap: str, name: str, tail: str
+) -> None:
+    assert runaway.macro_of(f"{lead} {'\\' * slashes}{gap}{name}{tail}") == name
 
 
 @given(
@@ -241,30 +250,40 @@ def test_locate_finds_the_open_argument(
 
 
 @needs_grammar
-@pytest.mark.xfail(
-    strict=True,
-    raises=UnicodeDecodeError,
-    reason="_by_tree decodes command names strictly; a Latin-1 source crashes it",
-)
 def test_latin1_byte_after_a_backslash() -> None:
     texscan.loaded_names(b"\\\xe9")
 
 
 @needs_grammar
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="the grammar parses \\LoadClass[..] as a generic command without the {..}",
-)
 def test_load_class_with_options() -> None:
     assert texscan.loaded_names(rb"\LoadClass[12pt]{article}") == {"article"}
 
 
 @needs_grammar
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="the grammar ends a comment at a NUL byte",
-)
 def test_nul_in_a_comment() -> None:
     assert texscan.loaded_names(b"% \0 \\usepackage{hidden}\n") == set()
+
+
+@needs_grammar
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (rb"\LoadClass [a=1,b] {x}[2020/01/01]", {"x"}),
+        (b"\\LoadClass% c\n[12pt]% d\n{article}", {"article"}),
+        (rb"\LoadClass[opt={]}][more]{article}", {"article"}),
+        (rb"\LoadClass[x] text {prose}", set()),
+        (rb"\LoadClass[x]\foo{bar}", set()),
+        (b"\\LoadClass" + b"%" * 5000, set()),
+        (b"\\LoadClass[" + b"%\n" * 2000, set()),
+    ],
+)
+def test_load_class_option_forms(source: bytes, expected: set[str]) -> None:
+    assert texscan.loaded_names(source) == expected
+
+
+def test_macro_of_many_backslashes_is_fast() -> None:
+    # linear: about a millisecond; quadratic: several seconds
+    message = "Paragraph ended before " + "\\" * 20_000 + " "
+    start = time.process_time()
+    assert runaway.macro_of(message) is None
+    assert time.process_time() - start < 0.5

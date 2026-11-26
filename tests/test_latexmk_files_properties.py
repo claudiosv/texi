@@ -4,15 +4,14 @@ import os.path
 from pathlib import Path
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
 from texi import latexmk_files as lf
 
-# Characters str.splitlines() breaks on. A path may legally hold all of them but
-# "\n"; the parsers split there anyway (see the xfail tests), so the round trips
-# leave the whole class out.
-BREAKS = "".join(map(chr, [10, 11, 12, 13, 28, 29, 30, 133, 0x2028, 0x2029]))
+# What ends a line. A path may hold anything else, including the other characters
+# str.splitlines() breaks on ("\r" is left out as it belongs to a "\r\n" ending).
+BREAKS = "\n\r"
 
 fragments = st.sampled_from([
     "PWD ",
@@ -36,8 +35,10 @@ fragments = st.sampled_from([
     "nan",
     "inf",
     "1e999",
+    chr(0x2028),
+    chr(12),
+    "9" * 5000,  # more digits than int() accepts
 ])
-# Not covered: a version number of more than 4300 digits (see the xfail test).
 garbage = st.lists(st.one_of(fragments, st.text(max_size=8)), max_size=40).map("".join)
 
 
@@ -65,7 +66,16 @@ def test_parse_fdb_never_raises(text: str) -> None:
 
 
 segments = st.one_of(
-    st.sampled_from([".", "..", "a", "b.tex", "texmf-dist", "x y"]),
+    st.sampled_from([
+        ".",
+        "..",
+        "a",
+        "b.tex",
+        "texmf-dist",
+        "x y",
+        f"a{chr(12)}b",
+        f"c{chr(0x2028)}d",
+    ]),
     st.text(
         st.characters(exclude_characters=BREAKS + "/", exclude_categories=["Cs"]),
         min_size=1,
@@ -177,6 +187,7 @@ used = st.builds(
     fdb_inputs=st.lists(used, max_size=4),
     fdb_outputs=st.lists(used, max_size=3),
     root=st.sampled_from([None, "/p", "/p/sub", "sub", "/"]),
+    with_fls=st.booleans(),
 )
 def test_source_and_external_files_partition_what_was_read(
     inputs: list[str],
@@ -184,9 +195,11 @@ def test_source_and_external_files_partition_what_was_read(
     fdb_inputs: list[str],
     fdb_outputs: list[str],
     root: str | None,
+    with_fls: bool,
 ) -> None:
-    # Always with a .fls: without its PWD relative paths are lost (xfail below).
-    fls = lf.Fls("/p", inputs, outputs)
+    # A relative root needs the PWD of a .fls to mean something under /p.
+    assume(with_fls or root != "sub")
+    fls = lf.Fls("/p", inputs, outputs) if with_fls else None
     rule = lf.Rule(
         "pdflatex",
         deps=[lf.Dep(p) for p in fdb_inputs]
@@ -195,10 +208,17 @@ def test_source_and_external_files_partition_what_was_read(
     pf = lf.ProjectFiles(Path("/p/build"), "main", fls, lf.Fdb(4, [rule]))
     source, external = pf.source_files(root), pf.external_files(root)
     assert not set(source) & set(external)
-    assert set(source) | set(external) == set(pf.all_inputs()) - set(
+    # Without a PWD, relative paths are relative to the root (default: aux_dir).
+    default = "/p" if with_fls else os.fspath(Path("/p/build").resolve())
+    base = Path(os.path.normpath(os.path.join(default, root or default)))
+    cwd = "/p" if with_fls else os.fspath(base)
+
+    def absolute(files: list[Path]) -> set[Path]:
+        return {Path(os.path.normpath(os.path.join(cwd, f))) for f in files}
+
+    assert set(source) | set(external) == absolute(pf.all_inputs()) - absolute(
         pf.generated_files()
     )
-    base = Path(os.path.normpath(os.path.join("/p", root or "/p")))
     for path in source:
         assert path.is_relative_to(base)
         assert not lf.is_texmf_path(str(path))
@@ -217,11 +237,6 @@ def test_fls_views_are_consistent(inputs: list[str], outputs: list[str]) -> None
     assert set(fls.read_then_written()) == set(everything) & set(fls.resolved_outputs())
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValueError,
-    reason="parse_fdb: int() of a '# Fdb version' over 4300 digits raises",
-)
 def test_fdb_huge_version_number_does_not_raise() -> None:
     lf.parse_fdb("# Fdb version " + "9" * 5000)
 
@@ -231,33 +246,26 @@ separators = pytest.mark.parametrize(
 )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="parse_fls uses splitlines(), which cuts a path at form feed or U+2028",
-)
 @separators
 def test_fls_path_keeps_unicode_line_breaks(char: str) -> None:
     assert lf.parse_fls(f"INPUT a{char}b.tex\n").inputs == [f"a{char}b.tex"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="parse_fdb uses splitlines(), which cuts a path at form feed or U+2028",
-)
 @separators
 def test_fdb_path_keeps_unicode_line_breaks(char: str) -> None:
     fdb = lf.parse_fdb(f'["pdflatex"] 1\n  "a{char}b.tex" 1 1 0 ""\n')
     assert [d.path for d in fdb.rules[0].deps] == [f"a{char}b.tex"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="without a .fls, relative .fdb_latexmk deps are never under the root",
-)
 def test_source_files_without_fls_keeps_relative_deps() -> None:
     fdb = lf.parse_fdb('["pdflatex"] 1\n  "main.tex" 1 1 abc ""\n')
     pf = lf.ProjectFiles(Path("/p"), "main", fls=None, fdb=fdb)
     assert [p.name for p in pf.source_files("/p")] == ["main.tex"]
+    assert pf.external_files("/p") == []
+
+
+def test_relative_root_without_fls() -> None:
+    fdb = lf.parse_fdb('["pdflatex"] 1\n  "main.tex" 1 1 abc ""\n')
+    pf = lf.ProjectFiles(Path("/p"), "main", fls=None, fdb=fdb)
+    assert pf.source_files(".") == [Path.cwd() / "main.tex"]
+    assert pf.external_files(".") == []

@@ -217,15 +217,18 @@ def _peek_project() -> ProjectConfig | None:
         return TexProjectConfig(
             **tomllib.loads(path.read_text(encoding="utf-8"))
         ).project
-    except OSError, tomllib.TOMLDecodeError, ValidationError:
+    except OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValidationError:
         return None
 
 
 latexmk_path = shutil.which("latexmk")
 texfmt_path = shutil.which("tex-fmt")
+
+
 @functools.cache
 def _inflect_engine() -> "inflect.engine":
     return inflect.engine()
+
 
 # --- Core Logic ---
 
@@ -241,8 +244,8 @@ def load_project_config(config_path: Path) -> TexProjectConfig:
     try:
         raw_data = tomllib.loads(config_path.read_text(encoding="utf-8"))
         return TexProjectConfig(**raw_data)
-    except tomllib.TOMLDecodeError as e:
-        console.print(f"[red]TOML Parsing Error:[/red] {e}")
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+        console.print(f"[red]TOML Parsing Error:[/red] {escape(str(e))}")
         raise typer.Exit(code=1)
     except ValidationError as e:
         console.print("[red]Configuration Validation Error:[/red]")
@@ -256,7 +259,7 @@ def format_perl_value(key: str, value: str | int | bool | list[str]) -> str:
         return "1" if value else "0"
 
     if isinstance(value, list):
-        perl_array = ", ".join(f"'{v}'" for v in value)
+        perl_array = ", ".join(_perl_str(v) for v in value)
         return f"({perl_array})"
 
     if isinstance(value, str):
@@ -302,7 +305,7 @@ def format_perl_value(key: str, value: str | int | bool | list[str]) -> str:
         if key == "bibtex_use" and value in bibtex_modes:
             return bibtex_modes[value]
 
-        return f"'{value}'"
+        return _perl_str(value)
 
     return str(value)
 
@@ -342,7 +345,10 @@ def engine_command(name: str, cfg: BuildConfig) -> str | None:
     flags = [f for f in flags if f not in (base or "").split()]
     if not flags:
         return base
-    exe, _, rest = (base or f"{name} %O %S").partition(" ")
+    command = base if base and base.strip() else f"{name} %O %S"
+    # the program is the first word, which may be quoted ("/a b/pdflatex")
+    first_word = r'^\s*((?:"[^"]*"|\S)+)\s*(.*)'
+    exe, rest = re.findall(first_word, command, re.DOTALL)[0]
     return f"{exe} {' '.join(flags)} {rest}".rstrip()
 
 
@@ -350,9 +356,17 @@ def _perl_str(value: str) -> str:
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
+def _perl_dq(value: str) -> str:
+    """`value` escaped for use inside a Perl "..." string."""
+    return re.sub(r'([\\"$@])', r"\\\1", value)
+
+
 def _search_path(dirs: list[str]) -> str:
     """BIBINPUTS/TEXINPUTS value: each dir searched recursively, then the defaults."""
-    parts = [d if Path(d).is_absolute() else f"$root/{d.strip('/')}" for d in dirs]
+    parts = [
+        _perl_dq(d) if Path(d).is_absolute() else f"$root/{_perl_dq(d.strip('/'))}"
+        for d in dirs
+    ]
     return ":".join(f"{p}//" for p in parts) + ":"
 
 
@@ -392,7 +406,10 @@ def render_latexmkrc(config: TexProjectConfig) -> str:
         "use File::Basename qw(dirname);",
         "my $root = dirname(abs_path(__FILE__));  # project root, wherever latexmk runs",
         'if (-d "$root/.texenv") {',
-        '  my ($bin) = glob("$root/.texenv/bin/*");  # standalone tree',
+        # not glob(): it splits a path at spaces and reads brackets as wildcards
+        '  my ($bin) = map { "$root/.texenv/bin/$_" } sort grep { !/^\\./ }',
+        '    do { my $dh; opendir($dh, "$root/.texenv/bin") ? readdir($dh) : () };'
+        "  # standalone tree",
         "  if ($bin) {",
         "    # only .texenv/ is on TeX's search path",
         f"    delete @ENV{{qw({' '.join(texenv.SCRUBBED)})}};",
@@ -404,7 +421,8 @@ def render_latexmkrc(config: TexProjectConfig) -> str:
         '    $ENV{TEXMFVAR} = $ENV{TEXMFSYSVAR} = "$t/texmf-var";',
         '    $ENV{TEXMFCONFIG} = $ENV{TEXMFSYSCONFIG} = "$t/texmf-config";',
         '    $ENV{TEXMFCNF} = "$t/texmf-dist/web2c";',
-        '    $ENV{PATH} = "$bin:$ENV{PATH}";',
+        # an empty PATH entry would mean the current directory
+        '    $ENV{PATH} = $ENV{PATH} ? "$bin:$ENV{PATH}" : $bin;',
         "  } else {  # usertree over the system TeX Live",
         '    $ENV{TEXMFHOME} = "$root/.texenv";',
         '    $ENV{TEXMFVAR} = "$root/.texenv/texmf-var";  # font maps from updmap-user',
@@ -428,7 +446,9 @@ def render_latexmkrc(config: TexProjectConfig) -> str:
                 f"$ENV{{{var}}} = \"{_search_path(dirs)}\" . ($ENV{{{var}}} // '');"
             )
     for k, v in config.build.env.items():
-        rc_lines.append(f"$ENV{{{k}}} = {_perl_str(v)};")
+        # Perl quotes a bareword hash key itself; anything else needs quotes
+        key = k if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k) else _perl_str(k)
+        rc_lines.append(f"$ENV{{{key}}} = {_perl_str(v)};")
     rc_lines.append("")
 
     rc_lines.append("# --- Build ---")
@@ -445,12 +465,13 @@ def render_latexmkrc(config: TexProjectConfig) -> str:
             and key in {"out_dir", "aux_dir", "out2_dir"}
             and not Path(value).is_absolute()
         ):
-            rc_lines.append(f'${key} = "$root/{value}";')
+            rc_lines.append(f'${key} = "$root/{_perl_dq(value)}";')
             continue
         if key == "default_files":
             continue  # emitted below, relative to the project root
         if key in {"clean_ext", "clean_full_ext"}:
-            rc_lines.append(f"${key} = '{' '.join(value)}';")  # space-separated string
+            words = " ".join(value)  # space-separated string
+            rc_lines.append(f"${key} = {_perl_str(words)};")
             continue
 
         perl_val = format_perl_value(key, value)
@@ -491,9 +512,16 @@ def load_sty_cache() -> dict[str, list[str]]:
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError, OSError:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except OSError, ValueError, RecursionError:  # ValueError: bad UTF-8 or JSON
         return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        k: v
+        for k, v in data.items()
+        if isinstance(v, list) and all(isinstance(n, str) for n in v)
+    }
 
 
 def save_sty_cache(cache: dict[str, list[str]]) -> None:
@@ -919,13 +947,13 @@ def init(
 
     lines = [
         "[project]",
-        f'name = "{config.name}"',
-        f'src_dir = "{config.src_dir}"',
-        f"targets = {json.dumps(config.project.targets)}",
+        f"name = {_toml_str(str(config.name))}",
+        f"src_dir = {_toml_str(config.src_dir)}",
+        f"targets = [{', '.join(map(_toml_str, config.project.targets))}]",
         "",
         "dependencies = [",
     ]
-    lines += [f'  "{dep}",' for dep in config.dependencies]
+    lines += [f"  {_toml_str(dep)}," for dep in config.dependencies]
     lines.append("]")
     lines.append("")
     config_path.write_text("\n".join(lines), encoding="utf-8")
@@ -958,7 +986,8 @@ def _usertree_packages(env_dir: Path) -> set[str]:
         return set()
     return {
         line[5:].strip()
-        for line in tlpdb.read_text().splitlines()
+        # not splitlines(): U+2028 in a longdesc must not start a new line
+        for line in tlpdb.read_text(encoding="utf-8", errors="replace").split("\n")
         if line.startswith("name ")
     }
 
@@ -976,8 +1005,10 @@ def _activate_env(env_dir: Path) -> None:
         for name in texenv.SCRUBBED:
             os.environ.pop(name, None)
         os.environ.update(_texenv_vars(env_dir))
-    paths = os.environ.get("PATH", "").split(os.pathsep)
-    if paths[0] != str(bin_dir):
+    path = os.environ.get("PATH")
+    # "".split() would give an empty entry, which means the current directory
+    paths = path.split(os.pathsep) if path else []
+    if paths[:1] != [str(bin_dir)]:
         os.environ["PATH"] = os.pathsep.join([str(bin_dir), *paths])
     latexmk_path = shutil.which("latexmk")
 
@@ -1059,11 +1090,15 @@ def _package_revisions(env_dir: Path, names: list[str]) -> dict[str, int]:
     tlpdb = env_dir / "tlpkg" / "texlive.tlpdb"
     if tlpdb.exists():
         name = None
-        for line in tlpdb.read_text().splitlines():
+        text = tlpdb.read_text(encoding="utf-8", errors="replace")
+        for line in text.split(
+            "\n"
+        ):  # not splitlines(): U+2028 in a longdesc must not start a new line
             if line.startswith("name "):
                 name = line[5:].strip()
             elif line.startswith("revision ") and name in names:
-                revs[name] = int(line[9:])
+                if (rev := tlpdb_mod.parse_int(line[9:].strip())) is not None:
+                    revs[name] = rev
     rest = [n for n in names if n not in revs]
     if rest:
         info = tlpdb_mod.load_local_installed()
@@ -1074,9 +1109,13 @@ def _package_revisions(env_dir: Path, names: list[str]) -> dict[str, int]:
 
 def _read_lock(path: Path) -> dict[str, int]:
     try:
-        return dict(tomllib.loads(path.read_text(encoding="utf-8")).get("packages", {}))
-    except OSError, tomllib.TOMLDecodeError:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except OSError, ValueError, RecursionError:  # ValueError: bad UTF-8 or TOML
         return {}
+    packages = data.get("packages")
+    if not isinstance(packages, dict):
+        return {}
+    return {name: rev for name, rev in packages.items() if type(rev) is int}
 
 
 def _write_lock(path: Path, revs: dict[str, int]) -> None:
@@ -1087,10 +1126,10 @@ def _write_lock(path: Path, revs: dict[str, int]) -> None:
         f'texlive = "{year}"' if year else "",
     ]
     if PROJECT_REPOSITORY:
-        lines.append(f"repository = {json.dumps(PROJECT_REPOSITORY)}")
+        lines.append(f"repository = {_toml_str(PROJECT_REPOSITORY)}")
     lines += ["", "[packages]"]
     for name, rev in sorted(revs.items()):
-        key = name if re.fullmatch(r"[A-Za-z0-9_-]+", name) else json.dumps(name)
+        key = name if re.fullmatch(r"[A-Za-z0-9_-]+", name) else _toml_str(name)
         lines.append(f"{key} = {rev}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -1468,22 +1507,70 @@ def _choose_package(name: str, candidates: list[str]) -> str | None:
     )
 
 
+# A TOML comment or string: the places where "[", "]" and key names mean nothing.
+_TOML_OPAQUE = re.compile(
+    r'#[^\n]*|"""(?:\\.|[^\\])*?"""(?!")|\'\'\'.*?\'\'\'(?!\')'
+    r'|"(?:\\.|[^"\\\n])*"|\'[^\'\n]*\'',
+    re.DOTALL,
+)
+
+
+def _toml_code(text: str) -> str:
+    """`text` with comments blanked and strings filled in, character for character."""
+    return _TOML_OPAQUE.sub(
+        lambda m: (" " if m[0].startswith("#") else "s") * len(m[0]), text
+    )
+
+
+def _closing_bracket(code: str, start: int) -> int:
+    """Offset of the "]" closing the array whose contents begin at `start`."""
+    depth = 1
+    for m in re.compile(r"[\[\]]").finditer(code, start):
+        depth += 1 if m[0] == "[" else -1
+        if not depth:
+            return m.start()
+    msg = "unclosed array"
+    raise ValueError(msg)
+
+
 def _add_to_toml(path: Path, new: list[str]) -> None:
     """Append packages to the `dependencies` array, preserving the rest of the file."""
     text = path.read_text(encoding="utf-8")
-    entries = "".join(f'  "{p}",\n' for p in new)
-    if m := re.search(r"^dependencies\s*=\s*\[(.*?)\]", text, re.MULTILINE | re.DOTALL):
-        body = m.group(1).rstrip()
-        if body and not body.endswith(","):
-            body += ","
-        body = body + "\n" if body else "\n"
-        text = text[: m.start(1)] + body + entries + text[m.end(1) :]
+    expected = tomllib.loads(text)
+    project = expected.setdefault("project", {})
+    project["dependencies"] = [*project.get("dependencies", []), *new]
+    code = _toml_code(text)
+    entries = "".join(f"  {_toml_str(p)},\n" for p in new)
+    if m := re.search(
+        r"^[ \t]*(?:project[ \t]*\.[ \t]*)?dependencies[ \t]*=[ \t]*\[",
+        code,
+        re.MULTILINE,
+    ):
+        start, end = m.end(), _closing_bracket(code, m.end())
+        body = text[start:end]
+        # the comma goes after the last item, which a comment may follow
+        last = len(code[start:end].rstrip())
+        if last and body[last - 1] != ",":
+            body = body[:last] + "," + body[last:]
+        text = text[:start] + body.rstrip() + "\n" + entries + text[end:]
     else:  # top-level keys must precede any [table]
         block = f"dependencies = [\n{entries}]\n"
-        if h := re.search(r"^\[project\][^\n]*\n", text, re.MULTILINE):
-            text = text[: h.end()] + block + text[h.end() :]
+        if h := re.search(r"^[ \t]*\[[ \t]*project[ \t]*\][^\n]*", code, re.MULTILINE):
+            text = text[: h.end()] + "\n" + block + text[h.end() + 1 :]
+        elif re.search(r"^[ \t]*project[ \t]*\.", code, re.MULTILINE):  # dotted keys
+            text = f"project.{block}" + text
         else:
             text = f"[project]\n{block}\n" + text
+    try:
+        edited = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        edited = None
+    if edited != expected:  # a layout not handled above: leave the file alone
+        console.print(
+            f"[red]Error:[/red] cannot edit {path.name}; add "
+            f"{escape(', '.join(new))} to \\[project] dependencies by hand."
+        )
+        raise typer.Exit(code=1)
     path.write_text(text, encoding="utf-8")
 
 
@@ -2270,6 +2357,13 @@ def build(
     )
 
 
+def _toml_str(value: str) -> str:
+    """`value` as a TOML basic string."""
+    # JSON escapes are TOML escapes, except the surrogate pairs of ensure_ascii;
+    # DEL is the one control character json.dumps then leaves unescaped
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
+
+
 def texfmt_config(cfg: TexFmtConfig) -> str:
     """Render `[tex-fmt]` as a tex-fmt config (flat, hyphenated keys)."""
     lines = []
@@ -2279,9 +2373,9 @@ def texfmt_config(cfg: TexFmtConfig) -> str:
         if isinstance(value, bool):
             value = str(value).lower()
         elif isinstance(value, list):
-            value = "[" + ", ".join(json.dumps(v) for v in value) + "]"
+            value = "[" + ", ".join(map(_toml_str, value)) + "]"
         elif isinstance(value, str):
-            value = json.dumps(value)
+            value = _toml_str(value)
         lines.append(f"{key.replace('_', '-')} = {value}")
     return "\n".join(lines) + "\n"
 
@@ -3561,9 +3655,8 @@ def _categories(env_dir: Path) -> dict[str, str]:
     """`name -> category` of the packages in the tree's tlpdb."""
     out: dict[str, str] = {}
     name = None
-    for line in (
-        (env_dir / "tlpkg" / "texlive.tlpdb").read_text(encoding="utf-8").splitlines()
-    ):
+    text = (env_dir / "tlpkg" / "texlive.tlpdb").read_text(encoding="utf-8")
+    for line in text.split("\n"):  # not splitlines(): see _usertree_packages
         if line.startswith("name "):
             name = line[5:].strip()
         elif line.startswith("category ") and name:
@@ -3618,6 +3711,8 @@ def _shell_commands(
         p for p in os.environ.get("PATH", "").split(os.pathsep) if p and p != bin_s
     ]
     names = sorted(variables)
+    # a usertree may have no bin/: an empty entry would mean the current directory
+    entries = [bin_s, *others] if bin_s else others
     lines: list[str] = []
     if shell is ShellName.FISH:
         q = lambda v: "'" + v.replace("\\", "\\\\").replace("'", "\\'") + "'"  # ruff: ignore[lambda-assignment]
@@ -3625,19 +3720,18 @@ def _shell_commands(
             lines += [f"set -gx PATH {' '.join(q(p) for p in others)}"]
             lines += [f"set -e {n}" for n in [*names, "TEXI_ENV"]]
         else:
-            lines += [
-                f"set -gx PATH {q(bin_s)} {' '.join(q(p) for p in others)}".rstrip()
-            ]
+            lines += [f"set -gx PATH {' '.join(q(p) for p in entries)}"]
             lines += [f"set -gx {n} {q(variables[n])}" for n in names]
             lines += [f"set -e {n}" for n in texenv.SCRUBBED] if bin_dir else []
             lines += [f"set -gx TEXI_ENV {q(root)}"]
     else:
         q = shlex.quote
         if off:
-            lines += [f"export PATH={q(os.pathsep.join(others))}"]
+            # PATH='' would search the current directory, so leave PATH alone then
+            lines += [f"export PATH={q(os.pathsep.join(others))}"] if others else []
             lines += [f"unset {n}" for n in [*names, "TEXI_ENV"]]
         else:
-            lines += [f"export PATH={q(os.pathsep.join([bin_s, *others]))}"]
+            lines += [f"export PATH={q(os.pathsep.join(entries))}"] if entries else []
             lines += [f"export {n}={q(variables[n])}" for n in names]
             lines += [f"unset {' '.join(texenv.SCRUBBED)}"] if bin_dir else []
             lines += [f"export TEXI_ENV={q(root)}"]

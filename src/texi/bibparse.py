@@ -122,7 +122,11 @@ def parse_bib(source: str | bytes) -> BibFile:
     """Parse BibTeX source text."""
     data = source.encode() if isinstance(source, str) else source
     root = _parser().parse(data).root_node
-    result = BibFile(lines=data.decode("utf-8", errors="replace").splitlines())
+    text = data.decode("utf-8", errors="replace")
+    # Split on "\n" only, as the grammar counts rows: splitlines() also breaks at
+    # form feeds, U+2028 and the like, which would shift BibEntry.line.
+    lines = text.removesuffix("\n").split("\n") if text else []
+    result = BibFile(lines=[line.removesuffix("\r") for line in lines])
     for node in root.children:
         if node.type == "entry":
             ty = _text(node.child_by_field_name("ty") or node).lstrip("@").lower()

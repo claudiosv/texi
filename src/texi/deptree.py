@@ -55,7 +55,8 @@ def read(env_dir: Path, arch: str | None = None) -> Graph:
     for stanza in re.split(r"\n\s*\n", text):
         name = rev = caption = None
         deps: list[str] = []
-        for line in stanza.splitlines():
+        # not splitlines(): a U+2028 in a longdesc must not start a "name" line
+        for line in stanza.split("\n"):
             if line.startswith("name "):
                 name = line[5:].strip()
             elif line.startswith("revision "):
@@ -148,15 +149,28 @@ def build(
     edges = g.dependents if invert else g.deps
     shown: set[str] = set()
 
+    def below(name: str) -> list[str]:
+        return [c for c in edges.get(name, []) if only is None or c in only]
+
+    # name -> fewest levels from a root, which is where a depth limit must show it
+    nearest = dict.fromkeys((r for r in roots if r in g.revisions), 0)
+    queue = list(nearest)
+    for name in queue:  # grows while iterating: breadth first
+        for c in below(name):
+            if c not in nearest:
+                nearest[c] = nearest[name] + 1
+                queue.append(c)
+
     def visit(name: str, level: int, path: tuple[str, ...]) -> Node:
         node = Node(name, g.revisions.get(name, "?"))
-        children = [
-            c
-            for c in edges.get(name, [])
-            if c not in path and (only is None or c in only)
-        ]
+        children = [c for c in below(name) if c not in path]
         if name in shown and children:
             node.seen = True
+            return node
+        # Expanding it further down than needed would use up the depth, and the
+        # nearer occurrence would only say "seen": leave the subtree to that one.
+        if depth is not None and level > nearest[name]:
+            node.cut = bool(children)
             return node
         shown.add(name)
         if depth is not None and level >= depth:

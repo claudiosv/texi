@@ -25,6 +25,7 @@ import os
 import weakref
 from pathlib import Path
 from typing import Any, Self
+from urllib.parse import quote
 
 lazy import httpx2
 lazy from hishel import SqliteStorage
@@ -316,6 +317,22 @@ class SearchResult(_Model):
 # --------------------------------------------------------------------------- client
 
 
+def _segment(key: str) -> str:
+    """``key`` percent-encoded as exactly one URL path segment.
+
+    Keys also come from CTAN responses, so `/`, `?` and `#` must not change
+    which resource is requested; `.` and `..` are refused.
+    """
+    if key in {"", ".", ".."}:
+        msg = f"invalid CTAN key: {key!r}"
+        raise CtanError(msg)
+    try:
+        return quote(key, safe="!$&'()*+,;=:@")
+    except UnicodeError as e:  # a lone surrogate
+        msg = f"invalid CTAN key: {key!r}"
+        raise CtanError(msg) from e
+
+
 def _model_list[T: BaseModel](model: type[T], data: Any) -> list[T]:
     return TypeAdapter(list[model]).validate_python(data)  # ty: ignore[invalid-type-form]
 
@@ -403,7 +420,8 @@ class CtanClient:
             resp = self._client.get(
                 url, params=params, extensions={"caching": {"ttl": ttl}}
             )
-        except httpx2.HTTPError as e:
+        # A bad redirect raises InvalidURL or ValueError, which are not HTTPErrors.
+        except (httpx2.HTTPError, httpx2.InvalidURL, ValueError) as e:
             msg = f"CTAN request failed: {url}: {e}"
             raise CtanError(msg) from e
         if resp.status_code == 404 and allow_404:
@@ -413,7 +431,7 @@ class CtanClient:
             raise CtanError(msg)
         try:
             return resp.json()
-        except ValueError as e:
+        except (ValueError, RecursionError) as e:  # RecursionError: deep nesting
             msg = f"CTAN returned invalid JSON for {url}"
             raise CtanError(msg) from e
 
@@ -462,7 +480,9 @@ class CtanClient:
             Also return the list of packages mentioning the author.
         """
         params = {"ref": "true"} if ref else None
-        data = self._api(f"author/{key}", params, ttl=TTL_STATIC, allow_404=True)
+        data = self._api(
+            f"author/{_segment(key)}", params, ttl=TTL_STATIC, allow_404=True
+        )
         if data is None:
             return None
         return self._parse(Author.model_validate, data, f"author/{key}")
@@ -475,7 +495,9 @@ class CtanClient:
     def topic(self, key: str, *, ref: bool = False) -> Topic | None:
         """Fetch one topic; None if unknown. `ref=True` adds its package keys."""
         params = {"ref": "true"} if ref else None
-        data = self._api(f"topic/{key}", params, ttl=TTL_STATIC, allow_404=True)
+        data = self._api(
+            f"topic/{_segment(key)}", params, ttl=TTL_STATIC, allow_404=True
+        )
         if data is None:
             return None
         return self._parse(Topic.model_validate, data, f"topic/{key}")
@@ -524,7 +546,9 @@ class CtanClient:
             Include given and family names on the authors.
         """
         params = {"author-name": "true"} if author_name else None
-        data = self._api(f"pkg/{key}", params, ttl=TTL_PACKAGE, allow_404=True)
+        data = self._api(
+            f"pkg/{_segment(key)}", params, ttl=TTL_PACKAGE, allow_404=True
+        )
         if data is None:
             return None
         return self._parse(Package.model_validate, data, f"pkg/{key}")
@@ -541,7 +565,7 @@ class CtanClient:
         live 3.0 API answers 404 here although the docs describe it (2.0 works).
         """
         data = self._get(
-            f"{self.base_url}/json/{api_version}/version",
+            f"{self.base_url}/json/{_segment(api_version)}/version",
             ttl=TTL_VERSION,
             allow_404=True,
         )

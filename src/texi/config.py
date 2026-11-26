@@ -295,4 +295,5 @@ class TexProjectConfig(BaseModel):
     @property
     def jobname(self) -> str:
         """Name of the output files, as latexmk will produce them."""
-        return self.set_jobname or Path(self.main_files[0]).stem
+        # `targets = []` is valid: fall back to the default target's name
+        return self.set_jobname or Path(next(iter(self.main_files), "main.tex")).stem

@@ -52,6 +52,17 @@ class TlpdbVerifyError(TlpdbError):
     """A downloaded database failed verification and there is no usable cache."""
 
 
+#: Digits a size or revision may have (any longer one is corrupt data).
+_MAX_DIGITS = 18
+
+
+def parse_int(value: str | None) -> int | None:
+    """A non-negative size or revision as written in a tlpdb, else None."""
+    if value and len(value) <= _MAX_DIGITS and value.isdecimal():
+        return int(value)
+    return None
+
+
 @dataclass
 class TlFile:
     """One file listed in a package.
@@ -207,7 +218,8 @@ class TlpdbStats:
 
 
 #: Version of the SQLite layout; a mismatch rebuilds the index from the cached ``.xz``.
-SCHEMA_VERSION = 2
+#: Version 3 rebuilds indexes parsed when U+2028 and the like still ended a line.
+SCHEMA_VERSION = 3
 #: Set to False to build indexes without the FTS5 table (searches then use LIKE).
 _FTS_ENABLED = True
 
@@ -351,9 +363,9 @@ class Tlpdb:
     def revisions(self) -> dict[str, int]:
         """``name -> revision`` of every package that has a numeric revision."""
         return {
-            n: int(r)
+            n: rev
             for n, r in self._conn.execute("SELECT name, revision FROM pkg")
-            if str(r).isdigit()
+            if (rev := parse_int(str(r))) is not None
         }
 
     def __init__(self, conn: sqlite3.Connection, index_path: Path | None = None):
@@ -627,23 +639,25 @@ class Tlpdb:
         where: list[str] = []
         params: list[str] = []
         if category:
-            where.append("lower(category) = ?")
-            params.append(category.lower())
+            # SQLite's lower() and LIKE only fold ASCII; REGEXP folds like `re`.
+            where.append("category REGEXP ?")
+            params.append(rf"\A{re.escape(category)}\Z")
         if not in_files:
             # A package must contain every term in a searched text field, so the
             # index can narrow the rows; Python scoring below decides for real.
             for t in terms:
-                if self._has_fts and len(t) >= 3:
+                # FTS5 gets ASCII only: its case folding is not `re`'s, and a
+                # NUL would end its query string.
+                plain = t.isascii() and "\0" not in t
+                if self._has_fts and plain and len(t) >= 3:
                     where.append(
                         "rowid IN (SELECT rowid FROM pkg_fts WHERE pkg_fts MATCH ?)"
                     )
                     params.append('"' + t.replace('"', '""') + '"')
                 else:
                     cols = ("name", "catalogue", "shortdesc", "longdesc")
-                    where.append(
-                        "(" + " OR ".join(f"{c} LIKE ? ESCAPE '\\'" for c in cols) + ")"
-                    )
-                    params.extend([_like(t)] * len(cols))
+                    where.append("(" + " OR ".join(f"{c} REGEXP ?" for c in cols) + ")")
+                    params.extend([re.escape(t)] * len(cols))
         sql = f"SELECT {_PKG_COLS} FROM pkg"
         if where:
             sql += " WHERE " + " AND ".join(where)
@@ -679,10 +693,10 @@ class Tlpdb:
 
     def _file_matches(self, term: str, regex: bool) -> dict[str, list[str]]:
         """Full paths matching one term (or the regex), grouped by package."""
-        if regex:
+        if regex or not term.isascii() or "\0" in term:
             sql = f"SELECT pkg, {_FULL_PATH} FROM file WHERE {_FULL_PATH} REGEXP ?"
-            arg = term
-        else:
+            arg = term if regex else re.escape(term)
+        else:  # LIKE is much faster, but only right for ASCII without NUL
             sql = (
                 f"SELECT pkg, {_FULL_PATH} FROM file "
                 f"WHERE {_FULL_PATH} LIKE ? ESCAPE '\\'"
@@ -830,9 +844,9 @@ def _parse_entry(lines: list[str]) -> TlPackage | None:
             if key == "binfiles":
                 sec = f"binfiles:{attrs.get('arch', '').strip()}"
             pkg.files.setdefault(sec, [])
-            size = attrs.get("size")
-            if size and size.isdigit():
-                pkg.sizes[sec] = pkg.sizes.get(sec, 0) + int(size)
+            size = parse_int(attrs.get("size"))
+            if size is not None:
+                pkg.sizes[sec] = pkg.sizes.get(sec, 0) + size
             section = sec
         elif key == "name":
             pkg.name = value
@@ -870,7 +884,9 @@ def _parse_packages(text: str) -> dict[str, TlPackage]:
                 packages[pkg.name] = pkg
             block.clear()
 
-    for line in text.splitlines():
+    # Only "\n" ends a line (rstrip drops the "\r" of CRLF). splitlines() would
+    # also split values at U+2028 and others, so a longdesc could add keys.
+    for line in text.split("\n"):
         if line.strip():
             block.append(line.rstrip())
         else:
@@ -1021,14 +1037,16 @@ def cache_dir() -> Path:
 def normalize_repository(repo: str) -> str:
     """Map the ``ctan``/``tlnet`` aliases to the mirror URL; strip a trailing slash."""
     repo = repo.strip()
+    while repo != (trimmed := repo.rstrip("/").strip()):
+        repo = trimmed
     if repo.lower() in {"ctan", "tlnet"}:
         return DEFAULT_REPOSITORY
-    return repo.rstrip("/")
+    return repo
 
 
 def _http_repository(value: str) -> str | None:
     """A usable repository URL from a tlmgr/tlpdb option value, else None."""
-    if value.lower() in {"ctan", "tlnet"}:
+    if value.rstrip("/").lower() in {"ctan", "tlnet"}:
         return DEFAULT_REPOSITORY
     if value.startswith(("http://", "https://")):
         return value.rstrip("/")
@@ -1106,13 +1124,16 @@ def read_system_tlpdb(path: Path) -> SystemTexLive:
     settings: dict[str, str] = {}
     revisions: dict[str, int] = {}
     current = ""
-    with path.open(encoding="utf-8", errors="replace") as fh:
+    # newline="\n": split lines exactly where the index parser does.
+    with path.open(encoding="utf-8", errors="replace", newline="\n") as fh:
         for line in fh:
             if line.startswith("name "):
                 current = line[5:].strip()
                 installed.add(current)
-            elif line.startswith("revision ") and line[9:].strip().isdigit():
-                revisions[current] = int(line[9:])
+            elif line.startswith("revision ") and (
+                (rev := parse_int(line[9:].strip())) is not None
+            ):
+                revisions[current] = rev
             elif current.startswith("00texlive.") and line.startswith("depend "):
                 key, value = split_setting(line[7:].strip())
                 settings[key] = value
@@ -1322,7 +1343,10 @@ def _open_index(path: Path) -> Tlpdb:
 
 #: Extra downloads when a mirror serves an index older than the cached one.
 STALE_RETRIES = 3
-_REVISION_LINE = re.compile(r"^revision (\d+)$", re.MULTILINE)
+# Like the parsers: trailing blanks are ignored and overlong numbers do not count.
+_REVISION_LINE = re.compile(
+    rf"^revision (\d{{1,{_MAX_DIGITS}}})[^\S\n]*$", re.MULTILINE
+)
 
 
 def _newest_revision(text: str) -> int:
@@ -1509,13 +1533,13 @@ def load_remote(
     old_revisions: dict[str, int] | None = None
     try:
         previous = xz.read_bytes() if xz.is_file() else None
-        if db_path.is_file():
-            old = _open_index(db_path)
+        # open_cached rebuilds an index of an older SCHEMA_VERSION first.
+        if have_cache and (old := open_cached(from_cache=True)) is not None:
             try:
                 old_revisions = old.revisions()
             finally:
                 old.close()
-    except OSError, sqlite3.Error:
+    except OSError, sqlite3.Error, TlpdbError:
         pass
     # The redirector may hand us a mirror that is behind the copy we already have.
     # Ask again (another mirror answers); if all are older keep the cached index.

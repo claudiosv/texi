@@ -341,6 +341,7 @@ def _draw_glyph(stream: bytes, scale: float) -> tuple[TTGlyphPen, float]:
     stack: list[tuple] = []
     nums: list[float] = []
     cur: tuple[float, float] | None = None
+    start: tuple[float, float] | None = None  # first point of the subpath
     open_ = False
     width = 0.0
 
@@ -353,6 +354,13 @@ def _draw_glyph(stream: bytes, scale: float) -> tuple[TTGlyphPen, float]:
         if open_:
             cu.closePath()
             open_ = False
+
+    def reopen() -> None:
+        # After h or re a segment begins a new subpath at the current point.
+        nonlocal open_, start
+        if not open_ and cur:
+            cu.moveTo(pt(*cur))
+            start, open_ = cur, True
 
     for tok in _TOKEN.findall(stream):
         if tok[:1] == b"/":
@@ -375,16 +383,21 @@ def _draw_glyph(stream: bytes, scale: float) -> tuple[TTGlyphPen, float]:
                 close()
                 cu.moveTo(pt(a[-2], a[-1]))
                 cur, open_ = (a[-2], a[-1]), True
+                start = cur
             case b"l" if len(a) >= 2 and cur:
+                reopen()
                 cu.lineTo(pt(a[-2], a[-1]))
                 cur = (a[-2], a[-1])
-            case b"c" if len(a) >= 6:
+            case b"c" if len(a) >= 6 and cur:
+                reopen()
                 cu.curveTo(pt(a[-6], a[-5]), pt(a[-4], a[-3]), pt(a[-2], a[-1]))
                 cur = (a[-2], a[-1])
             case b"v" if len(a) >= 4 and cur:
+                reopen()
                 cu.curveTo(pt(*cur), pt(a[-4], a[-3]), pt(a[-2], a[-1]))
                 cur = (a[-2], a[-1])
-            case b"y" if len(a) >= 4:
+            case b"y" if len(a) >= 4 and cur:
+                reopen()
                 cu.curveTo(pt(a[-4], a[-3]), pt(a[-2], a[-1]), pt(a[-2], a[-1]))
                 cur = (a[-2], a[-1])
             case b"re" if len(a) >= 4:
@@ -395,9 +408,10 @@ def _draw_glyph(stream: bytes, scale: float) -> tuple[TTGlyphPen, float]:
                 cu.lineTo(pt(x + w, y + h))
                 cu.lineTo(pt(x, y + h))
                 cu.closePath()
-                cur = (x, y)
+                cur = start = (x, y)
             case b"h":
                 close()
+                cur = start
             case _:
                 pass
         nums = []
@@ -406,9 +420,12 @@ def _draw_glyph(stream: bytes, scale: float) -> tuple[TTGlyphPen, float]:
 
 
 def _glyph_name(raw: str) -> str:
-    """PDF name with #xx escapes decoded, as a valid font glyph name."""
-    name = re.sub(r"#([0-9A-Fa-f]{2})", lambda m: chr(int(m[1], 16)), raw)
-    return re.sub(r"[^A-Za-z0-9._]", "_", name) or "g"
+    """PDF name with #xx escapes decoded, as a font glyph name.
+
+    Nothing else is changed: viewers find the glyph of an /Encoding name by this
+    name, and different PDF names must stay different glyphs.
+    """
+    return re.sub(r"#([0-9A-Fa-f]{2})", lambda m: chr(int(m[1], 16)), raw) or "g"
 
 
 def _build_ttf(

@@ -68,6 +68,13 @@ def _missing_entry(d: Diagnostic, bibs: Bibs) -> str | None:
     key = m.group(1)
     keys = [e.key for bf in bibs.values() for e in bf.entries]
     base = f"no entry '{key}' in any .bib read"
+    if hits := _find_entries(bibs, key):
+        where = ", ".join(_where(p, e.line) for p, e in hits)
+        return (
+            f"'{key}' is defined at {where}, but {d.source} did not find it: check that "
+            "this .bib is listed in \\bibliography or \\addbibresource and fix any "
+            "errors before the entry, then rebuild"
+        )
     if not keys:
         return (
             f"{base}: check the \\cite key and that the .bib is listed in "
@@ -95,7 +102,9 @@ def _duplicate(d: Diagnostic, bibs: Bibs) -> str | None:
         return None
     hits = _find_entries(bibs, key)
     if len(hits) < 2:
-        return f"key '{key}' is defined more than once: rename or delete the extra entry"
+        return (
+            f"key '{key}' is defined more than once: rename or delete the extra entry"
+        )
     where = ", ".join(_where(p, e.line) for p, e in hits)
     identical = all(e.fields == hits[0][1].fields for _, e in hits)
     tail = (
@@ -168,7 +177,9 @@ def _missing_source(d: Diagnostic, bibs: Bibs) -> str | None:
     else:
         return None
     name = Path(name).name
-    near = difflib.get_close_matches(name, [Path(p).name for p in bibs], n=1, cutoff=0.6)
+    near = difflib.get_close_matches(
+        name, [Path(p).name for p in bibs], n=1, cutoff=0.6
+    )
     tip = f" A similar file exists: {near[0]}." if near else ""
     return (
         f"'{name}' was not found.{tip} Put it in the project, src_dir or a "
@@ -198,7 +209,11 @@ def _bibtex_syntax(d: Diagnostic, bibs: Bibs) -> str | None:
     path, bf = found
     text = bf.lines[d.line - 1].strip() if 0 < d.line <= len(bf.lines) else ""
     start = [e for e in bf.entries if e.line <= d.line]
-    ent = f" in '{start[-1].key}' (entry starts at line {start[-1].line})" if start else ""
+    ent = (
+        f" in '{start[-1].key}' (entry starts at line {start[-1].line})"
+        if start
+        else ""
+    )
     return (
         f"{_where(path, d.line)}{ent}: `{text[:60]}` is not valid here. "
         "Usually the previous field lacks a trailing comma, or a brace/quote is unbalanced"

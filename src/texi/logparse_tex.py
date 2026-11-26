@@ -76,7 +76,8 @@ _RUNAWAY = re.compile(r"^Runaway (argument|definition|preamble|text)\?\s*$")
 _CONT = re.compile(r"^\(([A-Za-z][\w/+-]*)\)\s{2,}(.*)$")
 _CONT_EMPTY = re.compile(r"^\(([A-Za-z][\w/+-]*)\)\s*$")
 _PKG_ERR = re.compile(r"^(Package|Class|Module) (\S+) Error:")
-_ON_LINE = re.compile(r"\s*on input line (\d+)")
+# the lookbehind keeps it linear: a match cannot start inside a run of whitespace
+_ON_LINE = re.compile(r"(?<!\s)\s*on input line (\d+)")
 _ON_PAGE = re.compile(r"on page (\d+)")
 _BOX_LINES = re.compile(r"at lines? (\d+)(?:--(\d+))?")
 _OUTPUT = re.compile(
@@ -201,7 +202,7 @@ class _FileStack:
     def feed(self, line: str) -> None:
         opened_end = -1
         local = 0  # unbalanced `(` of ordinary text on this line
-        n = len(line)
+        end = len(line.rstrip())  # only whitespace from this column on
         for m in _OPEN.finditer(line):
             g = m.group(0)
             if g != ")":
@@ -226,7 +227,7 @@ class _FileStack:
             if not self.stack:
                 continue
             before = line[m.start() - 1] if m.start() else "\n"
-            at_end = not line[m.end() : n].strip()
+            at_end = m.end() >= end
             if before in "\n)]> " or at_end:
                 self.stack.pop()
 
@@ -261,13 +262,18 @@ def _is_boundary(line: str) -> bool:
     return bool(_LUA_ERR.match(head))
 
 
+def _byte_len(line: str) -> int:
+    """Length of `line` in UTF-8 bytes; a lone surrogate must not raise."""
+    return len(line.encode("utf-8", "surrogatepass"))
+
+
 def _unwrap(lines: list[str], width: int) -> list[str]:
     """Rejoin lines that TeX hard-wrapped at exactly `width` characters."""
     out: list[str] = []
     cur: str | None = None
     for ln in lines:
         cur = ln if cur is None else cur + ln
-        if len(ln) == width or (not ln.isascii() and len(ln.encode()) == width):
+        if len(ln) == width or (not ln.isascii() and _byte_len(ln) == width):
             continue
         out.append(cur)
         cur = None
@@ -284,7 +290,7 @@ def _detect_wrap(lines: list[str], max_print_line: int | None) -> int | None:
     for x in lines[1:]:
         if "stack positions out of" in x:
             continue  # TeX's memory statistics are never wrapped, but are often 79 wide
-        n = len(x) if x.isascii() else len(x.encode())
+        n = len(x) if x.isascii() else _byte_len(x)
         if n > 79:
             over += 1
         elif n == 79:
@@ -723,9 +729,9 @@ class _Parser:
             kind,
             full,
             where,
-            int(ln.group(1)) if ln else None,
+            to_int(ln.group(1)) if ln else None,
             package=_package_of(who),
-            page=int(page.group(1)) if page else None,
+            page=to_int(page.group(1)) if page else None,
             raw=raw,
         )
         self._finish(diag)
@@ -777,7 +783,9 @@ class _Parser:
     # -- post-processing -------------------------------------------------
     def _propagate_lines(self) -> None:
         """A line-less error followed by `Emergency stop` took its line from that stop."""
-        for prev, cur in zip(self.out, self.out[1:], strict=False):
+        # info messages must not come between them: include_info only adds diagnostics
+        diags = [d for d in self.out if d.kind != "info"]
+        for prev, cur in zip(diags, diags[1:], strict=False):
             if (
                 cur.code == "emergency-stop"
                 and cur.line

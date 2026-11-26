@@ -258,7 +258,10 @@ def install_order(
         dependent packages.
     """
     ordered = sorted(nodes)
-    comps = _components(ordered, {n: sorted(edges.get(n, ())) for n in ordered})
+    known = set(ordered)  # edges that leave ``nodes`` are ignored
+    comps = _components(
+        ordered, {n: sorted(known.intersection(edges.get(n, ()))) for n in ordered}
+    )
     comp_of = {n: i for i, comp in enumerate(comps) for n in comp}
     needs: list[set[int]] = [set() for _ in comps]
     users: list[set[int]] = [set() for _ in comps]
