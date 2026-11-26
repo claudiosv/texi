@@ -16,6 +16,9 @@ example_other/
 # mkdocs plugin cache
 .cache/
 
+# hypothesis example database
+.hypothesis/
+
 # coverage
 .coverage
 .coverage.*

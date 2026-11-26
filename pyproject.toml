@@ -50,6 +50,7 @@ requires = ["uv_build>=0.11.26,<0.12"]
 
 [dependency-groups]
 dev = [
+    "hypothesis>=6.170.17",
     "pytest>=9.2.0",
     "pytest-cov>=7.1.0",
     "pytest-randomly>=5.1.0",

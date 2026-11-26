@@ -75,14 +75,13 @@ def _run_gpgv(gpgv: str, signature: bytes, signed: bytes) -> Status:
             raise SignatureError(msg) from e
     status: dict[str, list[str]] = {}
     for line in proc.stdout.decode(errors="replace").splitlines():
-        if line.startswith("[GNUPG:] "):
-            keyword, *args = line.split()[1:]
-            status[keyword] = args
+        if line.startswith("[GNUPG:] ") and (words := line.split()[1:]):
+            status[words[0]] = words[1:]
     for bad in ("BADSIG", "REVKEYSIG", "EXPSIG"):
         if bad in status:
             msg = f"the signature of the package index was rejected ({bad})"
             raise SignatureError(msg)
-    signer = status.get("VALIDSIG", [""])[-1]
+    signer = (status.get("VALIDSIG") or [""])[-1]
     if signer == TEXLIVE_FINGERPRINT:
         if "EXPKEYSIG" in status:
             return "expired"
