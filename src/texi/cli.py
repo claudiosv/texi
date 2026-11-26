@@ -555,6 +555,10 @@ def _resolver_tlpdb(console: Console, refresh: bool = False) -> tlpdb_mod.Tlpdb 
             _report_index(console, db, repo)
         else:
             db = tlpdb_mod.load(repo)
+        if db.signature_warning:
+            console.print(f"[yellow]⚠ {escape(db.signature_warning)}[/yellow]")
+    except tlpdb_mod.TlpdbVerifyError as e:
+        console.print(f"[red]{escape(str(e))}[/red]")
     except (tlpdb_mod.TlpdbError, OSError, sqlite3.Error) as e:
         if DEBUG:
             console.print(f"[dim]tlpdb index unavailable: {escape(str(e))}[/dim]")

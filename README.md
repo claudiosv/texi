@@ -98,6 +98,7 @@ bibtex_use = "always"
 | `name` | none | Project name. Used as the latexmk `$jobname` (so the PDF is `<name>.pdf`) unless `build.jobname` is set. `texi init` sets it to the directory name. |
 | `targets` | `["main.tex"]` | The top-level `.tex` files to build, relative to `src_dir`. `build.default_files` overrides it. |
 | `texlive` | none | Expected TeX Live year, e.g. `"2026"`. texi warns if the installed year differs. |
+| `verify_repo` | `"auto"` | Verify the package index signature with `gpgv`: `auto`, `require` or `none`. See [configuration](docs/configuration.md). |
 | `repository` | none | TeX Live repository (`tlnet`) to install from. Point it at a frozen tlnet to really pin versions. |
 | `src_dir` | `"src"` | Directory holding the `.tex` sources. the generated `.latexmkrc` sets `$do_cd = 1` and `@default_files`, so latexmk runs inside `src_dir`. Use `"."` for sources in the project root (then latexmk picks up `*.tex` itself). |
 | `dependencies` | `[]` | TeX Live package names installed into `.texenv/` by `texi sync` / `texi add`. |

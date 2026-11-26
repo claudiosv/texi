@@ -31,6 +31,7 @@ from typing import Any, Self
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from texi import reposig
 from texi.resolver import is_pseudo_record
 
 DEFAULT_REPOSITORY = "https://mirror.ctan.org/systems/texlive/tlnet"
@@ -45,6 +46,10 @@ _SECTION_KINDS = ("runfiles", "docfiles", "srcfiles", "binfiles")
 
 class TlpdbError(Exception):
     """The database could not be loaded."""
+
+
+class TlpdbVerifyError(TlpdbError):
+    """A downloaded database failed verification and there is no usable cache."""
 
 
 @dataclass
@@ -335,6 +340,9 @@ class Tlpdb:
     stale_mirror
         True when every download was older than the cached index, so the cached
         one was kept.
+    signature_warning
+        Why a remote database is not verified, or why a new download was
+        rejected in favour of this cached one. None if there is nothing to report.
     changed
         After a fresh download: False if it is byte-identical to the copy it
         replaced, True if not, None if there was no earlier copy (or no download).
@@ -367,6 +375,7 @@ class Tlpdb:
         self.offline = False
         self.changed: bool | None = None
         self.stale_mirror = False
+        self.signature_warning: str | None = None
         self.previous_revisions: dict[str, int] | None = None
         self._cache: dict[str, TlPackage] = {}
         self._has_fts = (
@@ -1348,6 +1357,7 @@ def load_remote(
     refresh: bool = False,
     max_age: float = CACHE_MAX_AGE,
     progress: Callable[[int, int], None] | None = None,
+    verify: reposig.Mode | None = None,
 ) -> Tlpdb:
     """Load ``<repository>/tlpkg/texlive.tlpdb.xz`` through the cache.
 
@@ -1359,10 +1369,16 @@ def load_remote(
     is used without a request (unless ``refresh``), an older one is revalidated
     with a conditional GET, and used as a fallback when the network fails.
 
+    A downloaded index is verified (see :func:`texi.reposig.check`) before it
+    replaces the cache. ``verify`` defaults to ``[project] verify_repo`` of the
+    texproject.toml in the current directory, else ``auto``.
+
     Raises
     ------
     TlpdbError
         If the download fails and no cache exists.
+    TlpdbVerifyError
+        If verification fails and no usable cache exists.
     """
     repo = normalize_repository(repository)
     key = hashlib.sha1(repo.encode()).hexdigest()
@@ -1372,6 +1388,23 @@ def load_remote(
     db_path = cdir / f"{key}.sqlite"
     meta: dict[str, Any] = {}
     now = datetime.now(UTC).timestamp()
+    if verify is None:
+        project = _project_config(None)
+        verify = project.verify_repo if project is not None else "auto"
+    mode: reposig.Mode = verify
+    official = repo == DEFAULT_REPOSITORY
+    gpgv = None if mode == "none" else reposig.find_gpgv()
+
+    def trusted() -> bool:
+        """True if the cached copy is as good as what a download would give now."""
+        status = meta.get("verified")
+        if mode == "none" or status == "verified":
+            return True
+        if mode == "require":
+            return False
+        if gpgv is None:
+            return True
+        return status == "expired" or (status == "unsigned" and not official)
 
     def fetched_ts() -> float:
         for p in (xz, db_path):
@@ -1409,12 +1442,14 @@ def load_remote(
         db.fetched = datetime.fromtimestamp(fetched_ts(), tz=UTC)
         db.from_cache = from_cache
         db.offline = offline
+        if mode != "none":
+            db.signature_warning = reposig.message(meta.get("verified"))
         return db
 
     have_cache = xz.is_file() or db_path.is_file()
     if have_cache:
         meta = _read_meta(meta_path)
-    if have_cache and not refresh and now - fetched_ts() < max_age:
+    if have_cache and trusted() and not refresh and now - fetched_ts() < max_age:
         db = open_cached(from_cache=True)
         if db:
             return db
@@ -1422,14 +1457,21 @@ def load_remote(
 
     url = f"{repo}/tlpkg/texlive.tlpdb.xz"
     headers = {"User-Agent": USER_AGENT}
-    if have_cache:
+    if have_cache and trusted():
         if meta.get("etag"):
             headers["If-None-Match"] = meta["etag"]
         if meta.get("last_modified"):
             headers["If-Modified-Since"] = meta["last_modified"]
 
     def from_stale(**kw: bool) -> Tlpdb | None:
-        return open_cached(from_cache=True, **kw) if have_cache else None
+        # `require` never falls back to an unverified copy.
+        usable = have_cache and (mode != "require" or trusted())
+        return open_cached(from_cache=True, **kw) if usable else None
+
+    def fetch_file(target: str) -> bytes:
+        request = Request(target, headers={"User-Agent": USER_AGENT})
+        with urlopen(request, timeout=TIMEOUT) as resp:
+            return resp.read()
 
     try:
         with urlopen(Request(url, headers=headers), timeout=TIMEOUT) as resp:
@@ -1497,7 +1539,52 @@ def load_remote(
         if kept is not None:
             kept.stale_mirror = True
             return kept
+    # Mirrors sync at different times and the redirector picks one per request:
+    # check against the mirror that served the index, and on failure try again.
+    attempts = 0
+    while True:
+        try:
+            status = reposig.check(
+                lzma.decompress(body) if body.startswith(_XZ_MAGIC) else body,
+                final.removesuffix("/tlpkg/texlive.tlpdb.xz")
+                if final.endswith("/tlpkg/texlive.tlpdb.xz")
+                else repo,
+                mode=mode,
+                official=official,
+                gpgv=gpgv,
+                fetch=fetch_file,
+            )
+            break
+        except reposig.SignatureError as e:
+            failure = e
+        attempts += 1
+        if attempts <= STALE_RETRIES and not (mode == "require" and gpgv is None):
+            try:
+                with urlopen(
+                    Request(url, headers={"User-Agent": USER_AGENT}), timeout=TIMEOUT
+                ) as r3:
+                    body3 = _read_body(r3, progress)
+                    final3 = r3.geturl() if hasattr(r3, "geturl") else url
+                    etag3 = r3.headers.get("ETag")
+                    last_mod3 = r3.headers.get("Last-Modified")
+                text3, comp3 = _decode(body3)
+            except urllib.error.URLError, OSError, TimeoutError, TlpdbError:
+                pass
+            else:
+                if _newest_revision(text3) >= old_top:
+                    body, text, comp, final = body3, text3, comp3, final3
+                    etag, last_mod = etag3, last_mod3
+            continue
+        kept = from_stale()
+        if kept is not None:
+            kept.signature_warning = (
+                f"rejected the new package index: {failure}; using the cached one"
+            )
+            return kept
+        msg = f"cannot verify {url}: {failure}"
+        raise TlpdbVerifyError(msg) from failure
     cdir.mkdir(parents=True, exist_ok=True)
+    _unlink(meta_path)  # the old status must never describe the new files
     tmp = xz.with_suffix(".xz.tmp")
     tmp.write_bytes(body)
     tmp.replace(xz)
@@ -1506,8 +1593,9 @@ def load_remote(
         meta["etag"] = etag
     if last_mod:
         meta["last_modified"] = last_mod
-    _write_meta(meta_path, meta)
     _write_index(db_path, text, comp, repo, meta, now)
+    meta["verified"] = status
+    _write_meta(meta_path, meta)
     db = open_cached(from_cache=False)
     if db is None:
         msg = f"cannot open the index {db_path}"

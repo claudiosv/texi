@@ -225,6 +225,10 @@ class ProjectConfig(BaseModel):
     # redirector) and then refused. Set false to warn about a mismatch (a stale
     # mirror, usually) and install the package anyway.
     verify_checksums: bool = True
+    # Verify the TeX Live signature of the package index with gpgv. "auto" warns
+    # if gpgv is missing, the key expired or a custom repository is unsigned;
+    # "require" refuses all of these; "none" skips the check.
+    verify_repo: Literal["auto", "require", "none"] = "auto"
     # TeX Live repository (tlnet) to install from; point at a frozen tlnet to truly pin versions
     repository: str | None = None
     # Directory holding the .tex sources; "." = project root. latexmk runs with -cd.

@@ -102,6 +102,10 @@ def _load(
                 db = tl.load(repo, refresh=refresh)
     except tl.TlpdbError as e:
         raise _fail(str(e)) from e
+    if db.signature_warning:
+        err_console.print(
+            f"[orange1]⚠ {escape(db.signature_warning)}[/orange1]", soft_wrap=True
+        )
     if db.offline:
         err_console.print(
             "[orange1]⚠ Could not reach the server; using the cached copy "

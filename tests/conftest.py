@@ -57,6 +57,14 @@ def _reset_tlmgr_guard():
 
 
 @pytest.fixture(autouse=True)
+def _no_gpgv(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Results must not depend on whether GnuPG is installed; test_reposig opts in."""
+    from texi import reposig
+
+    monkeypatch.setattr(reposig, "find_gpgv", lambda: None)
+
+
+@pytest.fixture(autouse=True)
 def _no_retry_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the number of download retries but not the waiting."""
     from texi import archive
